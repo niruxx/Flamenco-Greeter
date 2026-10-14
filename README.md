@@ -1,103 +1,435 @@
-# 💃 Flamenco Greeter
+<a id="top"></a>
 
-A [greetd](https://sr.ht/~kennylevinsen/greetd/) login screen for [Flamenco Shell](https://github.com/niruxx/flamenco-shell). It's built from the same pieces as the shell's lock screen (same Theme, palettes, fonts, controls and motion), so logging in, locking and unlocking all look like one screen.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner-light.svg">
+  <img alt="Flamenco Greeter: the Flamenco lock screen, at login" src="docs/assets/banner-dark.svg" width="100%">
+</picture>
 
-It follows the model of [DMS greeter](https://github.com/AvengeMedia/dank-greeter): a small Quickshell UI that greetd runs inside a minimal compositor, plus a `sync` command that copies your theme, wallpaper and avatar somewhere the greeter user can read them.
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.2.0-E8466F?style=for-the-badge" alt="Version 0.2.0">
+  <img src="https://img.shields.io/badge/greetd-greeter-FFB867?style=for-the-badge" alt="greetd greeter">
+  <img src="https://img.shields.io/badge/Quickshell-0.3.2-FF5722?style=for-the-badge&logo=qt&logoColor=white" alt="Quickshell 0.3.2">
+  <img src="https://img.shields.io/badge/Material%20Design-3-6750A4?style=for-the-badge&logo=materialdesign&logoColor=white" alt="Material Design 3">
+  <img src="https://img.shields.io/badge/Arch%20Linux-package-1793D1?style=for-the-badge&logo=archlinux&logoColor=white" alt="Arch Linux package">
+</p>
+
+<p align="center">
+  <a href="#gallery"><b>📸 Gallery</b></a> &nbsp;·&nbsp;
+  <a href="#features"><b>✨ Features</b></a> &nbsp;·&nbsp;
+  <a href="#install"><b>🚀 Install</b></a> &nbsp;·&nbsp;
+  <a href="#configure"><b>⚙️ Configure</b></a> &nbsp;·&nbsp;
+  <a href="#fingerprint"><b>👆 Fingerprint</b></a> &nbsp;·&nbsp;
+  <a href="#troubleshooting"><b>🛟 Help</b></a> &nbsp;·&nbsp;
+  <a href="#reference"><b>📚 Reference</b></a>
+</p>
+
+<a id="about"></a>
+
+## 💃 About
+
+Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/niruxx/flamenco-shell). It's built from the same Theme, palettes, fonts and controls as the shell's lock screen, so logging in, locking and unlocking all look like one screen. It runs under [greetd](https://sr.ht/~kennylevinsen/greetd/) and follows the model of [DMS greeter](https://github.com/AvengeMedia/dank-greeter): a small [Quickshell](https://quickshell.org) UI inside a minimal compositor, plus one command that brings your theme across.
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>🎨 Your theme, at login</h3>
+      Palette, light or dark mode, accent, roundness, fonts, wallpaper and avatar, all taken from your Flamenco settings.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🔒 One screen, everywhere</h3>
+      The same clock, avatar, password pill, motion and power row as the lock screen, using the shell's own components.
+    </td>
+    <td width="33%" valign="top">
+      <h3>👆 Fingerprint ready</h3>
+      The reader starts listening as soon as you're picked. A typed password always works too, with no waiting for the scan.
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>👥 Every user</h3>
+      A user picker with avatars, and each user's own theme cross-fades in as you switch between them.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🧭 niri first</h3>
+      Runs on niri, Hyprland or sway, generating the compositor config with your keyboard layout and cursor.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🛡️ Private by design</h3>
+      Only what the login screen needs leaves your home directory, into a folder only the greeter can read.
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary><b>📑 Table of contents</b></summary>
+
+- [📸 Gallery](#gallery)
+- [✨ Features](#features)
+- [🚀 Install](#install): prebuilt package, build the package, from source
+- [⚙️ Configure](#configure): turn it on, sync your theme, what carries over, compositor & monitors, launcher options
+- [👆 Fingerprint login](#fingerprint)
+- [🛟 Troubleshooting](#troubleshooting)
+- [📚 Reference](#reference): commands, files, how a login works
+- [🛠️ Development](#development)
+
+</details>
+
+<a id="gallery"></a>
+
+## 📸 Gallery
+
+<p align="center">
+  <img src="docs/screenshots/login-dark.png" alt="The Flamenco login screen" width="100%">
+</p>
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="docs/screenshots/user-picker.png" alt="User picker"><br><b>👥 User picker</b></td>
+    <td width="50%" align="center"><img src="docs/screenshots/session-picker.png" alt="Session chooser"><br><b>🖥️ Session chooser</b></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/wrong-password.png" alt="Wrong password"><br><b>🔑 Wrong password</b></td>
+    <td align="center"><img src="docs/screenshots/login-light.png" alt="Light mode"><br><b>☀️ Light mode</b></td>
+  </tr>
+</table>
+
+### 👆 Fingerprint login
+
+<table>
+  <tr>
+    <td width="33%" align="center"><img src="docs/screenshots/fingerprint.png" alt="Scan your finger on the reader"><br><b>Scan your finger</b></td>
+    <td width="33%" align="center"><img src="docs/screenshots/fingerprint-miss.png" alt="Fingerprint not recognized"><br><b>Not recognized</b></td>
+    <td width="33%" align="center"><img src="docs/screenshots/fingerprint-typing.png" alt="Typing a password instead"><br><b>Or type a password</b></td>
+  </tr>
+</table>
+
+### 🌈 Wears every Flamenco palette
+
+<table>
+  <tr>
+    <td width="25%" align="center"><img src="docs/screenshots/palette-catppuccin.png" alt="Catppuccin"><br>Catppuccin</td>
+    <td width="25%" align="center"><img src="docs/screenshots/palette-rosepine.png" alt="Rosé Pine"><br>Rosé Pine</td>
+    <td width="25%" align="center"><img src="docs/screenshots/palette-nord.png" alt="Nord"><br>Nord</td>
+    <td width="25%" align="center"><img src="docs/screenshots/palette-gruvbox.png" alt="Gruvbox"><br>Gruvbox</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/palette-dracula.png" alt="Dracula"><br>Dracula</td>
+    <td align="center"><img src="docs/screenshots/palette-kanagawa.png" alt="Kanagawa"><br>Kanagawa</td>
+    <td align="center"><img src="docs/screenshots/palette-tokyonight.png" alt="Tokyo Night"><br>Tokyo Night</td>
+    <td align="center"><img src="docs/screenshots/palette-everforest.png" alt="Everforest"><br>Everforest</td>
+  </tr>
+</table>
+
+> [!NOTE]
+> The screenshots are of `flamenco-greeter preview` running with generated wallpapers. Regenerate them with `tools/screenshots.sh`.
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
+<a id="features"></a>
 
 ## ✨ Features
 
-- **Your theme on the login screen.** Palette (including colors from the wallpaper), light/dark mode, accent, roundness, fonts, wallpaper and avatar all come from your Flamenco settings.
-- **Same layout as the lock screen.** Clock, avatar, password pill with animated dots, shake on a wrong password, and power buttons along the bottom.
-- **Multiple users.** A user picker with avatars, plus "Other user…" for typing a name. Each synced user brings their own theme, and the screen cross-fades when you switch between them.
-- **Session chooser.** Lists every installed Wayland session, and X11 sessions when `startx` is available.
-- **Remembers you.** The last user and session are preselected next time. Turn this off with `--no-save-username` / `--no-save-session`.
-- **Your keyboard and cursor.** Keyboard layout, options, repeat rate, numlock and cursor theme are applied to the greeter's compositor, so typing your password works as it does on the desktop.
-- **niri, Hyprland or sway.** The compositor config is generated at startup. Monitor layout can go in `/etc/greetd/flamenco-niri.kdl`.
-- **Multi-monitor.** Every screen gets the wallpaper and clock. The first screen gets the login card.
-- **Fingerprint login.** With fprintd, the reader starts listening as soon as a user with enrolled fingers is picked, and the field says "Scan your finger on the reader". Typing a password still works at any time, with no waiting for the scan to time out.
-- **Extra PAM prompts.** One-time codes and token PINs appear in the password field.
+| | |
+|---|---|
+| 🎨 **Your theme** | Palette (including colors from your wallpaper via `matugen`), light/dark mode, accent, roundness, fonts, UI scale and animation speed all come from your Flamenco settings. |
+| 🔒 **Lock screen layout** | Clock, avatar, password pill with animated dots, a shake on a wrong password, and suspend, restart and power-off along the bottom. |
+| 👥 **Multiple users** | Picker with avatars, plus *Other user…* for typing a name. Each synced user brings their own palette and wallpaper, which cross-fade in. |
+| 🖥️ **Session chooser** | Every installed Wayland session, plus X11 sessions when `startx` is available. niri is preselected the first time. |
+| 🧠 **Remembers you** | The last user and session are preselected next time. Turn this off with `--no-save-username` / `--no-save-session`. |
+| ⌨️ **Your keyboard & cursor** | Layout, variant, options, repeat rate, numlock and cursor theme are applied to the greeter's compositor, so your password types the same as on the desktop. |
+| 👆 **Fingerprint** | With fprintd: the reader listens as soon as a user is picked, "Scan your finger on the reader" appears, and a typed password skips the scan instantly. |
+| 🔐 **Extra PAM prompts** | One-time codes, token PINs and lockout notices show up in the password field. |
+| 🪟 **niri, Hyprland or sway** | The compositor config is generated at every start. Your own monitor layout can be included. |
+| 🖥️ **Multi-monitor** | Every screen gets the wallpaper and clock. The first screen gets the login card. |
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
+<a id="install"></a>
 
 ## 🚀 Install
 
-### Arch Linux (from this checkout)
+**Requirements:** [Flamenco Shell](https://github.com/niruxx/flamenco-shell) (the greeter reuses its theme code), `greetd`, `quickshell`, `python`, `python-gobject`, and a compositor (`niri`, `hyprland` or `sway`). Optional: `fprintd` for fingerprint login, `matugen` for wallpaper colors, `upower` for the battery indicator.
+
+### 📦 Option 1: the prebuilt package (Arch Linux)
+
+Every release is kept under [`History Builds/`](History%20Builds), one folder per version:
 
 ```sh
-cd packaging/arch && makepkg -si
+sudo pacman -S --needed greetd quickshell python-gobject niri   # if not installed yet
+sudo pacman -U "History Builds/flamenco-greeter-0.2.0-1/flamenco-greeter-0.2.0-1-any.pkg.tar.zst"
 ```
 
-This depends on `flamenco-shell`, `greetd` and `quickshell`. Pacman's systemd hooks create the `greeter` user and `/var/cache/flamenco-greeter`.
+Pacman's systemd hooks create the `greeter` user and the `/var/cache/flamenco-greeter` data folder automatically.
 
-### Manual
+### 🛠️ Option 2: build the package yourself
 
 ```sh
-sudo make install                 # installs to /usr
+git clone https://github.com/niruxx/flamenco-greeter.git
+cd flamenco-greeter/packaging/arch
+makepkg -si                      # build and install in one go
+```
+
+Or run `packaging/arch/build-local.sh` to build into a new `History Builds/flamenco-greeter-<version>-<rel>/` folder without installing.
+
+### 🧰 Option 3: from source (any distro)
+
+```sh
+sudo make install                                  # installs to /usr
 sudo systemd-sysusers && sudo systemd-tmpfiles --create
 ```
 
-If Flamenco Shell lives somewhere other than `/usr/share/flamenco-shell/shell`, pass `SHELL_DIR=/path/to/flamenco-shell/shell`.
+If Flamenco Shell isn't at `/usr/share/flamenco-shell/shell`, pass its location: `sudo make install SHELL_DIR=/path/to/flamenco-shell/shell`.
 
-### Turn it on
+> [!TIP]
+> Run `flamenco-greeter preview` before switching anything on. It opens the greeter in a window with your current theme. In preview, any password except `wrong` "logs in", and nothing is actually started.
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
+<a id="configure"></a>
+
+## ⚙️ Configure
+
+### 1. Turn it on
 
 ```sh
-flamenco-greeter preview   # optional: try it in a window first
-flamenco-greeter enable    # writes /etc/greetd/config.toml and enables greetd (asks first)
-flamenco-greeter sync      # copies your theme, wallpaper and avatar
-flamenco-greeter doctor    # checks everything is in place
+flamenco-greeter enable          # niri (default); or: enable hyprland | enable sway
 ```
 
-`enable` takes a compositor: `flamenco-greeter enable hyprland`. To set greetd up by hand instead, see [examples/config.toml](examples/config.toml).
+This shows what it will write, asks before changing anything, then:
 
-## 🎨 Keeping it in sync
+- writes `/etc/greetd/config.toml` (backing up the old one) to start `flamenco-greeter --command niri` as the `greeter` user;
+- makes greetd the display manager (`systemctl enable -f greetd`), replacing SDDM, GDM or similar;
+- offers fingerprint login if it finds a reader.
 
-Run `flamenco-greeter sync` after changing your theme or wallpaper. It asks for sudo unless you're in the `greeter` group.
+<details>
+<summary>Prefer to edit greetd's config yourself?</summary>
 
-To have the login screen follow changes automatically:
+```toml
+# /etc/greetd/config.toml
+[terminal]
+vt = 1
+
+[default_session]
+user = "greeter"
+command = "/usr/bin/flamenco-greeter --command niri"
+```
+
+Then run `sudo systemctl enable -f greetd`. A copy lives at [`examples/config.toml`](examples/config.toml).
+</details>
+
+### 2. Bring your theme across
 
 ```sh
-sudo usermod -aG greeter $USER      # then log out and back in
+flamenco-greeter sync
+```
+
+This copies your palette, wallpaper and avatar to the login screen. Run it again after changing your theme. It asks for sudo once unless you're in the `greeter` group.
+
+**Keep it in sync automatically:**
+
+```sh
+sudo usermod -aG greeter $USER                            # then log out and back in
 systemctl --user enable --now flamenco-greeter-sync.path
 ```
 
-The path unit re-syncs whenever `~/.config/flamenco/settings.json` changes. It never prompts for a password.
+From then on, every change you make in Flamenco Settings reaches the login screen by itself, with no password prompts.
 
-Only what the login screen needs is copied: appearance, wallpaper, avatar, clock format, keyboard layout and cursor. Shortcuts, autostart entries, your weather city and everything else stay in your home directory.
-
-## 👆 Fingerprint login
+### 3. Check everything
 
 ```sh
-sudo pacman -S fprintd
-fprintd-enroll                      # enroll a finger for your user
-flamenco-greeter fingerprint enable # adds pam_fprintd to /etc/pam.d/greetd (backed up first)
-flamenco-greeter fingerprint status # reader, PAM and enrolled fingers at a glance
+flamenco-greeter doctor
 ```
 
-`flamenco-greeter enable` also offers this when it sees a reader. `fingerprint disable` removes the block again. If your PAM setup already has `pam_fprintd` (directly, or through an included file such as `system-auth`), it's detected and left alone.
+```text
+ ✓ greetd installed
+ ✓ Quickshell installed
+ ✓ a compositor (niri, Hyprland or sway)
+ ✓ greeter UI at /usr/share/flamenco-greeter/greeter
+ ✓ Flamenco Shell components linked
+ ✓ 'greeter' user exists
+ ✓ /var/cache/flamenco-greeter exists
+ ✓ theme synced for alice
+ ✓ greetd uses flamenco-greeter
+```
 
-How it behaves on the login screen:
+Reboot (or `sudo systemctl restart greetd` from a TTY) and you're done.
 
-- When a user is picked, the greeter opens a PAM session straight away. `pam_fprintd` checks, as root, whether that user has fingers enrolled. If they do, the reader starts and the field shows **"Scan your finger on the reader"**, with "or type your password" underneath. If they don't, it moves on to the password prompt, and nothing changes on screen.
-- A finger that doesn't match shakes the field and shows "Fingerprint not recognized", but keeps whatever you've typed. After six misses the reader stops until the user is picked again, and only the password works.
-- When a scan round times out, a new one starts, so the reader keeps listening while the screen sits idle.
-- Pressing Enter on a typed password while the reader is listening briefly claims the reader for the greeter (`flamenco-greeter reader-hold`). `pam_fprintd` then can't use it, so it gives up immediately and the password goes straight through. If the reader can't be claimed, the password is held and sent as soon as the scan round ends (up to 30 s).
+### 🎨 What carries over from Flamenco Settings
 
-The greeter itself never asks fprintd about other users' fingers. That would need polkit's `setusername` right, which would also let the login screen enroll fingers for anyone. `pam_fprintd` does the checking instead.
+| Settings page | On the login screen |
+|---|---|
+| **Appearance** | Palette (or colors from your wallpaper), dark/light mode, accent color, roundness, font, UI scale, animation speed |
+| **Wallpaper** | The current wallpaper, blurred behind the login card like the lock screen |
+| **About** | Your profile picture (or `~/.face`) |
+| **Clock** | 24-hour or 12-hour time |
+| **Keyboard** | Layout, variant, options, model, repeat delay and rate, numlock |
+| **App theming** | Cursor theme and size (when that theme is installed system-wide) |
 
-## 🖥️ Monitors and compositor tweaks
+Nothing else is copied. Shortcuts, autostart entries, your weather city and the rest stay in your home directory, and the copy is readable only by the `greeter` user and group.
 
-The greeter compositor doesn't read your desktop config. For monitor layout or anything else niri-specific, create `/etc/greetd/flamenco-niri.kdl` ([example](examples/flamenco-niri.kdl)) and it will be included automatically. For Hyprland or sway, pass a base config with `-C`:
+### 🖥️ Monitors & compositor tweaks
+
+The greeter's compositor doesn't read your desktop config. For niri, put monitor layout (or anything else) in `/etc/greetd/flamenco-niri.kdl` and it's included automatically:
+
+```kdl
+// /etc/greetd/flamenco-niri.kdl
+output "DP-1" {
+    mode "2560x1440@165"
+    scale 1.25
+}
+output "eDP-1" { off; }
+```
+
+For Hyprland or sway, pass a config to start from. The greeter's own lines are appended:
 
 ```toml
 command = "/usr/bin/flamenco-greeter --command hyprland -C /etc/greetd/hypr-outputs.lua"
 ```
 
+### 🚩 Launcher options
+
+Add these after `--command` in greetd's `command = "…"` line:
+
+| Option | What it does |
+|---|---|
+| `--command niri\|hyprland\|sway` | Compositor that hosts the login screen (required) |
+| `-C, --config PATH` | Compositor config to start from (e.g. monitor layout) |
+| `--no-save-username` | Don't preselect the last user |
+| `--no-save-session` | Don't preselect the last session |
+| `--cache-dir DIR` | Use a different data folder (default `/var/cache/flamenco-greeter`) |
+| `-p, --path DIR` | Run a different copy of the greeter UI |
+| `--debug` | Log to the terminal instead of the journal |
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
+<a id="fingerprint"></a>
+
+## 👆 Fingerprint login
+
+```sh
+sudo pacman -S fprintd
+fprintd-enroll                         # enroll a finger for your user
+flamenco-greeter fingerprint enable    # adds pam_fprintd to /etc/pam.d/greetd (backed up first)
+flamenco-greeter fingerprint status    # reader, PAM and enrolled fingers at a glance
+```
+
+`fingerprint disable` removes it again. If your PAM setup already uses `pam_fprintd` (directly, or through an included file like `system-auth`), it's detected and left alone.
+
+**On the login screen:**
+
+- 👆 **Picked users are checked right away.** The greeter starts a PAM login as soon as a user is selected. If that user has fingers enrolled, the reader starts and the field reads **"Scan your finger on the reader"**. Users without fingers simply see the password field.
+- ❌ **Missed scans keep your typing.** A finger that doesn't match shakes the field and shows *Fingerprint not recognized*, without clearing what you've typed. After six misses the reader rests until the user is picked again.
+- 🔁 **It keeps listening.** When a scan times out, a new one starts, so the reader is always ready while the screen is idle.
+- ⌨️ **Passwords never wait.** Pressing Enter on a typed password briefly claims the reader, so PAM skips straight to checking your password.
+
+> [!NOTE]
+> The greeter never asks fprintd about other users' fingers. That would need a polkit right that would also let the login screen *enroll* fingers for anyone. `pam_fprintd` does the check itself, as root.
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
+<a id="troubleshooting"></a>
+
+## 🛟 Troubleshooting
+
+<details>
+<summary><b>Black screen, or the greeter doesn't appear</b></summary>
+
+Switch to another TTY with <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F2</kbd>, log in, and read the logs:
+
+```sh
+journalctl -b -t flamenco-greeter/niri      # or flamenco-greeter/hyprland, /sway
+flamenco-greeter doctor
+```
+
+To go back to your previous display manager in the meantime: `sudo systemctl enable -f sddm` (or `gdm`, …) and reboot.
+</details>
+
+<details>
+<summary><b>The login screen has the default theme or wallpaper</b></summary>
+
+Run `flamenco-greeter sync`. If you changed your theme since, run it again, or set up automatic sync (see [Configure](#configure)).
+</details>
+
+<details>
+<summary><b>My password is "wrong" but works on the desktop</b></summary>
+
+The greeter uses the keyboard layout from your last sync. Run `flamenco-greeter sync` after changing layouts in Settings → Keyboard.
+</details>
+
+<details>
+<summary><b>The fingerprint message never shows</b></summary>
+
+Run `flamenco-greeter fingerprint status`: it checks that fprintd runs, a reader is found, `pam_fprintd` is in greetd's PAM stack and your fingers are enrolled. The login screen only listens when a reader is present *and* fingerprint login is enabled.
+</details>
+
+<details>
+<summary><b>A typed password waits a while when fingerprint login is on</b></summary>
+
+The greeter couldn't claim the reader (look for "couldn't hold the reader" in the journal), so the password is sent once the scan round ends, after up to 30 seconds.
+</details>
+
+<details>
+<summary><b>The wrong monitor gets the login card</b></summary>
+
+The first screen the compositor reports gets it. Turn off the outputs you don't want at login in `/etc/greetd/flamenco-niri.kdl` (see [Monitors](#configure)).
+</details>
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
+<a id="reference"></a>
+
+## 📚 Reference
+
+### Commands
+
+| Command | |
+|---|---|
+| `flamenco-greeter enable [niri\|hyprland\|sway]` | Point greetd at the greeter and make it the display manager |
+| `flamenco-greeter sync [--quiet] [--no-sudo]` | Copy your theme, wallpaper and avatar to the login screen |
+| `flamenco-greeter fingerprint status\|enable\|disable` | Manage fingerprint login |
+| `flamenco-greeter preview [--fingerprint] [--palette P] [--mode M] [--wallpaper W]` | Try the greeter in a window (`--fingerprint` adds a pretend reader) |
+| `flamenco-greeter doctor [--json]` | Check the setup |
+| `flamenco-greeter --command niri …` | Start the greeter (what greetd runs) |
+
+### How a login works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/flow-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/flow-light.svg">
+  <img alt="greetd starts the launcher, which starts niri and the Quickshell UI, which hands off to your desktop" src="docs/assets/flow-dark.svg" width="100%">
+</picture>
+
+1. **greetd** starts `flamenco-greeter --command niri` as the `greeter` user.
+2. **The launcher** puts the last user's synced settings where the shell's `Settings` reads them, writes a niri config with their keyboard layout and cursor, and starts niri.
+3. **niri** runs the Quickshell UI. It lists users and sessions, preselects the remembered ones, and talks to greetd (opening the PAM session right away when fingerprint login is on).
+4. **Your desktop:** on success it plays the lock screen's exit animation, and greetd launches the session you picked.
+
+### Files
+
+```text
+/etc/greetd/config.toml                 greetd: which greeter to run
+/etc/greetd/flamenco-niri.kdl           optional: extra niri config (monitors…)
+/etc/pam.d/greetd                       PAM stack (fingerprint block added by `fingerprint enable`)
+/usr/share/flamenco-greeter/greeter/    the UI; Commons/, Widgets/, assets/ link to Flamenco Shell
+/var/cache/flamenco-greeter/            greeter:greeter, 2770
+  users/<name>/settings.json            your synced settings (written by `sync`)
+  users/<name>/wallpaper.*, face        your wallpaper and avatar
+  state/memory.json                     last user + session
+```
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
+<a id="development"></a>
+
 ## 🛠️ Development
 
 ```sh
-make dev        # link ../flamenco-shell/shell's Commons, Widgets and assets into ./greeter
-make preview    # run the greeter in a window from this checkout (hot-reloads)
+make dev          # link ../flamenco-shell/shell's Commons, Widgets and assets into ./greeter
+make preview      # run it in a window from this checkout (hot-reloads)
 ```
 
-In preview, any password except `wrong` "logs in" (it prints the session it would have started), and the power buttons only log what they would do. `flamenco-greeter preview --fingerprint` adds a pretend reader. The preview can also be driven over IPC:
+Drive a preview over IPC:
 
 ```sh
 qs -p greeter ipc call greeter menu users      # or: sessions, ""
@@ -106,36 +438,18 @@ qs -p greeter ipc call greeter submit
 qs -p greeter ipc call greeter finger true     # with --fingerprint: a matching (true) or wrong (false) finger
 ```
 
-To build the Arch package into `History Builds/flamenco-greeter-<version>-<rel>/`, run `packaging/arch/build-local.sh`.
+| Tool | |
+|---|---|
+| `tools/screenshots.sh` | Capture the README screenshots (KDE Spectacle or niri) |
+| `tools/readme-assets.py` | Redraw the banners and diagram from the shell's palettes |
+| `packaging/arch/build-local.sh` | Build the Arch package into `History Builds/` |
 
-### Layout
-
-```
-bin/flamenco-greeter        launcher (run by greetd), sync, enable, fingerprint, preview, doctor,
-                            plus the users/sessions/fingerprint probes and reader hold the UI uses
-greeter/
-  shell.qml                 entry point: layer-shell surfaces, or a window in preview
-  Modules/Greeter/          GreeterContent (the screen), user/session menus, avatar
-  Services/                 Greeter (greetd conversation + state), memory, power
-  Commons/ Widgets/ assets/ ─┐ linked from Flamenco Shell, so Theme, Settings,
-  Services/Time.qml        ─┘ palettes, fonts and controls are the shell's own
+```text
+bin/flamenco-greeter        launcher, sync, enable, fingerprint, preview, doctor, and the probes the UI uses
+greeter/shell.qml           entry: a layer-shell surface per screen, or a window in preview
+greeter/Modules/Greeter/    the login screen, user/session menus, avatar
+greeter/Services/           greetd conversation + state, memory, power
 data/                       sysusers, tmpfiles, sync units
 ```
 
-### How a login works
-
-1. greetd starts `flamenco-greeter --command niri` as the `greeter` user.
-2. The launcher copies the last user's synced `settings.json` to where the shell's `Settings` singleton reads it. It points `HOME` and the XDG directories into `/var/cache/flamenco-greeter`, writes a niri config with that user's keyboard layout and cursor, and starts niri. niri then starts `qs -p /usr/share/flamenco-greeter/greeter`.
-3. The UI loads users, sessions and the fingerprint state from `flamenco-greeter users|sessions|fingerprint --json`, preselects the remembered ones, and talks to greetd through `Quickshell.Services.Greetd`. With fingerprint login on, it opens the PAM session right away so the reader can listen.
-4. On success it saves the user and session, plays the lock screen's exit animation, and asks greetd to launch the session. Quickshell exits and niri quits.
-
-### Data directory
-
-```
-/var/cache/flamenco-greeter/          greeter:greeter, 2770
-  users/<name>/settings.json          written by `sync`
-  users/<name>/wallpaper.*, face
-  config/flamenco/settings.json       active theme (copied from a user slot at startup)
-  state/memory.json                   last user + session
-  state/niri.kdl                      generated compositor config
-```
+<p align="center"><sub>Made to match <a href="https://github.com/niruxx/flamenco-shell">Flamenco Shell</a> · 💃</sub></p>

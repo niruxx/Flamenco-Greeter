@@ -4,8 +4,11 @@
   flamenco-greeter --command niri|hyprland|sway [OPTIONS]   start the greeter (run by greetd)
   flamenco-greeter sync [--quiet] [--no-sudo] copy your theme, wallpaper and avatar to the login screen
   flamenco-greeter enable [niri|hyprland|sway] point greetd at flamenco-greeter (asks for sudo)
-  flamenco-greeter preview [--fingerprint]    try the greeter in a window, with your current theme
-                                              (--fingerprint simulates a reader)
+  flamenco-greeter preview [OPTIONS]          try the greeter in a window, with your current theme
+      --fingerprint             simulate a fingerprint reader
+      --palette NAME            try another palette (or "wallpaper")
+      --mode dark|light         try the other color mode
+      --wallpaper PATH          try another wallpaper
   flamenco-greeter fingerprint status|enable|disable   fingerprint login (pam_fprintd in /etc/pam.d/greetd)
   flamenco-greeter doctor [--json]            check the setup
   flamenco-greeter users --json               login users (used by the greeter UI)
@@ -824,14 +827,41 @@ def cmd_enable(args: list[str]) -> int:
 
 def cmd_preview(args: list[str]) -> int:
     fingerprint = "--fingerprint" in args
-    args = [a for a in args if a != "--fingerprint"]
+    overrides, rest, i = {}, [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--palette", "--mode", "--wallpaper") and i + 1 < len(args):
+            overrides[a[2:]] = args[i + 1]
+            i += 2
+        else:
+            if a != "--fingerprint":
+                rest.append(a)
+            i += 1
+    args = rest
     qs = qs_bin()
     if not qs:
         return die("Quickshell (qs) is not installed")
     user = pwd.getpwuid(os.getuid()).pw_name
     with tempfile.TemporaryDirectory(prefix="flamenco-greeter-preview-") as tmp:
         cache = Path(tmp)
-        stage_user(cache / "users" / user, cache, user)
+        slot = cache / "users" / user
+        stage_user(slot, cache, user)
+        if overrides:
+            # only the throwaway preview copy changes; your settings stay as they are
+            data = read_json(slot / "settings.json")
+            app = data.setdefault("appearance", {})
+            if "palette" in overrides:
+                app["palette"] = overrides["palette"]
+                app["accentOverride"] = ""
+            if "mode" in overrides:
+                app["mode"] = overrides["mode"]
+            if "wallpaper" in overrides:
+                wall = Path(os.path.expanduser(overrides["wallpaper"]))
+                if not wall.is_file():
+                    return die(f"no such wallpaper: {wall}")
+                shutil.copyfile(wall, slot / ("wallpaper" + wall.suffix.lower()))
+                data.setdefault("wallpaper", {})["current"] = str(slot / ("wallpaper" + wall.suffix.lower()))
+            (slot / "settings.json").write_text(json.dumps(data, indent=2))
         (cache / "state").mkdir()
         (cache / "state" / "memory.json").write_text(json.dumps({"lastUser": user}))
         pick_active_theme(cache)
