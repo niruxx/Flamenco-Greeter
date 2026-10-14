@@ -204,7 +204,10 @@ Item {
                 font.pixelSize: Theme.fsLg
                 text: Greeter.manualName
                 onTextEdited: Greeter.manualName = text
-                onAccepted: input.forceActiveFocus()
+                onAccepted: {
+                    input.forceActiveFocus();
+                    Greeter.listen();
+                }
                 KeyNavigation.tab: input
                 Keys.onEscapePressed: Greeter.selectUser(Math.max(0, Greeter.userIndex))
             }
@@ -228,6 +231,8 @@ Item {
             Behavior on border.color { CAnim {} }
 
             readonly property bool echo: Greeter.promptText !== "" && Greeter.promptEcho
+            // the reader is listening and nothing's typed yet
+            readonly property bool fingerprint: Greeter.scanning && Greeter.buffer === "" && !Greeter.authenticating
 
             // shake on failure
             transform: Translate { id: shake }
@@ -282,7 +287,7 @@ Item {
                     if (root.menu !== "")
                         root.menu = "";
                     else
-                        Greeter.cancel();
+                        Greeter.reset();
                 }
                 Component.onCompleted: if (root.primary) forceActiveFocus()
             }
@@ -310,7 +315,7 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight
                 visible: Greeter.buffer.length === 0
-                text: Greeter.authenticating ? "Checking…" : Greeter.errorText || Greeter.promptText || (Greeter.ready ? "Enter password" : "Loading…")
+                text: Greeter.authenticating ? "Checking…" : Greeter.errorText || Greeter.promptText || (Greeter.scanning ? "Scan your finger on the reader" : Greeter.ready ? "Enter password" : "Loading…")
                 dim: !Greeter.errorText
                 color: Greeter.errorText ? Theme.error : Theme.textDim
             }
@@ -320,14 +325,35 @@ Item {
                 anchors.right: parent.right
                 anchors.rightMargin: 16
                 anchors.verticalCenter: parent.verticalCenter
-                icon: Greeter.authenticating ? "progress_activity" : "arrow_forward"
+                icon: Greeter.authenticating ? "progress_activity" : field.fingerprint ? "fingerprint" : "arrow_forward"
                 color: Theme.accent
+                fill: field.fingerprint ? 1 : 0
                 RotationAnimation on rotation {
                     running: Greeter.authenticating
                     from: 0; to: 360; duration: 800; loops: Animation.Infinite
                     // don't leave the arrow tilted where the spinner stopped
                     onRunningChanged: if (!running) spinner.rotation = 0
                 }
+                // breathe while the reader waits for a finger
+                SequentialAnimation on scale {
+                    running: field.fingerprint
+                    loops: Animation.Infinite
+                    onRunningChanged: if (!running) spinner.scale = 1
+                    NumberAnimation { to: 1.18; duration: 900; easing.type: Easing.InOutSine }
+                    NumberAnimation { to: 1; duration: 900; easing.type: Easing.InOutSine }
+                }
+            }
+
+            // under the field, so the card doesn't move when it comes and goes
+            FText {
+                anchors.top: parent.bottom
+                anchors.topMargin: Theme.sp2
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "or type your password"
+                dim: true
+                font.pixelSize: Theme.fsSm
+                opacity: field.fingerprint ? 1 : 0
+                Behavior on opacity { Anim { duration: Theme.durShort } }
             }
 
             MouseArea {
@@ -455,6 +481,8 @@ Item {
         function menu(name: string): void { root.menu = name; }
         function type(text: string): void { Greeter.buffer = text; }
         function submit(): void { Greeter.submit(); }
+        // with `preview --fingerprint`: touch the fake reader
+        function finger(match: bool): void { Greeter.previewFinger(match); }
     }
 
     // fade from / to black around the login
