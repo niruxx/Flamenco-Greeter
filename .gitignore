@@ -1,0 +1,12 @@
+__pycache__/
+.qmlls.ini
+dist/
+pkg/
+src/
+*.pkg.tar.zst
+
+# linked from Flamenco Shell by `make dev` / `make install`
+greeter/Commons
+greeter/Widgets
+greeter/assets
+greeter/Services/Time.qml

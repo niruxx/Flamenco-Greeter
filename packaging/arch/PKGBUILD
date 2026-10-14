@@ -1,0 +1,25 @@
+# Maintainer: niruxxdaboi
+#
+# Builds from this local checkout:  cd packaging/arch && makepkg -si
+pkgname=flamenco-greeter
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="greetd login screen for Flamenco Shell, matching its lock screen and theme"
+arch=('any')
+url="https://github.com/niruxx/flamenco-greeter"
+license=('unknown')
+# the greeter links Flamenco Shell's Commons/Widgets/assets at runtime
+depends=('flamenco-shell' 'greetd' 'quickshell' 'python' 'qt6-declarative')
+optdepends=(
+    'niri: compositor for the login screen (default)'
+    'hyprland: compositor for the login screen'
+    'sway: compositor for the login screen'
+    'matugen: colors from wallpaper on the login screen'
+    'upower: battery on the login screen'
+)
+install=flamenco-greeter.install
+
+package() {
+    cd "$startdir/../.."
+    make install DESTDIR="$pkgdir" PREFIX=/usr
+}

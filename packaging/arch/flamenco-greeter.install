@@ -1,0 +1,11 @@
+post_install() {
+    echo ">> Flamenco Greeter installed."
+    echo ">>   flamenco-greeter enable   make greetd (with the Flamenco greeter) the display manager"
+    echo ">>   flamenco-greeter sync     bring your theme, wallpaper and avatar to the login screen"
+    echo ">>   flamenco-greeter preview  try it in a window first"
+    echo ">>   flamenco-greeter doctor   check the setup"
+}
+
+post_upgrade() {
+    echo ">> Flamenco Greeter upgraded. The new version shows at the next login screen."
+}

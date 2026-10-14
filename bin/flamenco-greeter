@@ -1,0 +1,682 @@
+#!/usr/bin/env python3
+"""flamenco-greeter: greetd login screen for Flamenco Shell.
+
+  flamenco-greeter --command niri|hyprland|sway [OPTIONS]   start the greeter (run by greetd)
+  flamenco-greeter sync [--quiet] [--no-sudo] copy your theme, wallpaper and avatar to the login screen
+  flamenco-greeter enable [niri|hyprland|sway] point greetd at flamenco-greeter (asks for sudo)
+  flamenco-greeter preview                    try the greeter in a window, with your current theme
+  flamenco-greeter doctor [--json]            check the setup
+  flamenco-greeter users --json               login users (used by the greeter UI)
+  flamenco-greeter sessions --json            installed desktop sessions (used by the greeter UI)
+
+Launcher options:
+  --command COMPOSITOR      niri, hyprland or sway (required)
+  -C, --config PATH         compositor config to start from (the greeter's own lines are appended)
+  -p, --path DIR            greeter QML directory (default: the installed one)
+  --cache-dir DIR           greeter data directory (default: /var/cache/flamenco-greeter)
+  --no-save-session         don't remember the last session
+  --no-save-username        don't remember the last user
+  --debug                   log to stderr instead of the journal
+"""
+
+from __future__ import annotations
+
+import grp
+import json
+import os
+import pwd
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+VERSION = "0.1.0"
+
+SELF = Path(__file__).resolve()
+DEFAULT_CACHE = Path("/var/cache/flamenco-greeter")
+GREETER_USER = "greeter"
+GREETD_CONFIG = Path("/etc/greetd/config.toml")
+COMPOSITORS = ("niri", "hyprland", "sway")
+
+# Settings sections the login screen reads. Everything else in the user's
+# settings.json (shortcuts, autostart, weather city…) stays in their home.
+SYNCED_KEYS = {
+    "general": ("use24h", "showSeconds", "avatar"),
+    "appearance": None,  # all of it
+    "wallpaper": ("current", "fillMode"),
+    "keyboard": ("layout", "variant", "options", "model", "repeatDelay", "repeatRate", "numlock"),
+    "apps": ("cursorTheme", "cursorSize"),
+}
+
+
+def die(msg: str, code: int = 1) -> int:
+    print(f"flamenco-greeter: {msg}", file=sys.stderr)
+    return code
+
+
+def greeter_dir() -> Path:
+    """The Quickshell config root: env override, this checkout, or the installed copy."""
+    if env := os.environ.get("FLAMENCO_GREETER_DIR"):
+        return Path(env)
+    dev = SELF.parent.parent / "greeter"
+    if (dev / "shell.qml").exists():
+        return dev
+    return Path("/usr/share/flamenco-greeter/greeter")
+
+
+def cache_dir() -> Path:
+    return Path(os.environ.get("FLAMENCO_GREETER_CACHE") or DEFAULT_CACHE)
+
+
+def qs_bin() -> str | None:
+    return shutil.which("qs") or shutil.which("quickshell")
+
+
+def read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name, "").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+# ── users ──
+
+def login_defs() -> tuple[int, int]:
+    lo, hi = 1000, 60000
+    try:
+        for line in Path("/etc/login.defs").read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "UID_MIN":
+                lo = int(parts[1])
+            elif len(parts) >= 2 and parts[0] == "UID_MAX":
+                hi = int(parts[1])
+    except (OSError, ValueError):
+        pass
+    return lo, hi
+
+
+def login_shells() -> set[str]:
+    try:
+        return {l.strip() for l in Path("/etc/shells").read_text().splitlines() if l.strip() and not l.startswith("#")}
+    except OSError:
+        return set()
+
+
+def list_users(cache: Path) -> list[dict]:
+    lo, hi = login_defs()
+    shells = login_shells()
+    out = []
+    for pw in pwd.getpwall():
+        if not (lo <= pw.pw_uid <= hi):
+            continue
+        if pw.pw_shell.endswith(("nologin", "/false")) or (shells and pw.pw_shell not in shells):
+            continue
+        slot = cache / "users" / pw.pw_name
+        avatar = ""
+        for cand in (slot / "face", Path("/var/lib/AccountsService/icons") / pw.pw_name):
+            if os.access(cand, os.R_OK):
+                avatar = str(cand)
+                break
+        out.append({
+            "name": pw.pw_name,
+            "realName": pw.pw_gecos.split(",")[0].strip() or pw.pw_name,
+            "avatar": avatar,
+            "synced": (slot / "settings.json").is_file(),
+        })
+    return sorted(out, key=lambda u: u["name"])
+
+
+# ── sessions ──
+
+def session_dirs() -> list[tuple[Path, str]]:
+    data = [d for d in os.environ.get("XDG_DATA_DIRS", "").split(":") if d]
+    data += ["/usr/local/share", "/usr/share"]
+    seen, out = set(), []
+    for kind, sub in (("wayland", "wayland-sessions"), ("x11", "xsessions")):
+        for d in data:
+            p = Path(d) / sub
+            if p not in seen:
+                seen.add(p)
+                out.append((p, kind))
+    return out
+
+
+def parse_desktop(path: Path) -> dict:
+    entry, section = {}, ""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("["):
+            section = line
+            continue
+        if section != "[Desktop Entry]" or "=" not in line or line.startswith("#"):
+            continue
+        k, v = line.split("=", 1)
+        entry.setdefault(k.strip(), v.strip())
+    return entry
+
+
+def exec_argv(exec_line: str) -> list[str]:
+    # drop desktop-entry field codes (%f, %U…); %% is a literal percent
+    cleaned = re.sub(r"%[fFuUdDnNickvm]", "", exec_line).replace("%%", "%")
+    try:
+        return shlex.split(cleaned)
+    except ValueError:
+        return cleaned.split()
+
+
+def list_sessions() -> list[dict]:
+    out, seen = [], set()
+    startx = shutil.which("startx")
+    for d, kind in session_dirs():
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.desktop")):
+            sid = f.stem
+            if sid in seen:
+                continue
+            e = parse_desktop(f)
+            if not e.get("Name") or not e.get("Exec"):
+                continue
+            if e.get("Hidden", "").lower() == "true" or e.get("NoDisplay", "").lower() == "true":
+                continue
+            if (te := e.get("TryExec")) and not (shutil.which(te) or os.access(te, os.X_OK)):
+                continue
+            argv = exec_argv(e["Exec"])
+            if not argv:
+                continue
+            if kind == "x11":
+                if not startx:
+                    continue
+                argv = [startx, "/usr/bin/env"] + argv
+            seen.add(sid)
+            desktops = e.get("DesktopNames", "").rstrip(";").replace(";", ":")
+            env = [f"XDG_SESSION_TYPE={kind}", f"XDG_SESSION_DESKTOP={sid}"]
+            if desktops:
+                env.append(f"XDG_CURRENT_DESKTOP={desktops}")
+            out.append({
+                "id": sid,
+                "name": e["Name"] + (" (X11)" if kind == "x11" else ""),
+                "comment": e.get("Comment", ""),
+                "type": kind,
+                "command": argv,
+                "env": env,
+            })
+    return out
+
+
+# ── sync ──
+
+def user_settings_path() -> Path:
+    base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return base / "flamenco" / "settings.json"
+
+
+def expand(p: str) -> Path | None:
+    if not p:
+        return None
+    p = p[7:] if p.startswith("file://") else p
+    return Path(os.path.expanduser(p))
+
+
+def stage_user(dest: Path, cache: Path, user: str) -> list[str]:
+    """Write a user's greeter slot into `dest`, with paths pointing at `cache`.
+    Returns notes about what was (or wasn't) copied."""
+    notes = []
+    src = read_json(user_settings_path())
+    if not src:
+        raise SystemExit(die(f"no settings at {user_settings_path()}; start Flamenco Shell once first"))
+    slot = cache / "users" / user
+    dest.mkdir(parents=True, exist_ok=True)
+
+    synced: dict = {"configVersion": src.get("configVersion", 0)}
+    for section, keys in SYNCED_KEYS.items():
+        part = src.get(section) or {}
+        synced[section] = dict(part) if keys is None else {k: part[k] for k in keys if k in part}
+
+    wall = expand((src.get("wallpaper") or {}).get("current", ""))
+    if wall and wall.is_file():
+        name = "wallpaper" + wall.suffix.lower()
+        shutil.copyfile(wall, dest / name)
+        synced["wallpaper"]["current"] = str(slot / name)
+        notes.append(f"wallpaper  {wall}")
+    else:
+        synced["wallpaper"]["current"] = ""
+        notes.append("wallpaper  none set")
+
+    face = expand((src.get("general") or {}).get("avatar", "") or "~/.face")
+    if face and face.is_file():
+        shutil.copyfile(face, dest / "face")
+        synced["general"]["avatar"] = str(slot / "face")
+        notes.append(f"avatar     {face}")
+    else:
+        synced["general"]["avatar"] = ""
+        notes.append("avatar     none (set one in Settings → About, or ~/.face)")
+
+    (dest / "settings.json").write_text(json.dumps(synced, indent=2) + "\n")
+    notes.append(f"theme      {synced['appearance'].get('palette', 'flamenco')} / {synced['appearance'].get('mode', 'dark')}")
+    return notes
+
+
+def privileged(cmd: list[str]) -> int:
+    """Run as root: sudo in a terminal, pkexec otherwise (e.g. from the Settings app)."""
+    if os.geteuid() == 0:
+        return subprocess.call(cmd)
+    if sys.stdin.isatty() and shutil.which("sudo"):
+        return subprocess.call(["sudo"] + cmd)
+    if shutil.which("pkexec"):
+        return subprocess.call(["pkexec"] + cmd)
+    return die("need root: install sudo or polkit (pkexec)")
+
+
+def cmd_sync(args: list[str]) -> int:
+    cache = DEFAULT_CACHE
+    quiet = "--quiet" in args
+    no_sudo = "--no-sudo" in args
+    if "--cache-dir" in args:
+        cache = Path(args[args.index("--cache-dir") + 1])
+    if os.geteuid() == 0:
+        return die("run sync as your own user, not root; it asks for sudo when it needs it")
+    user = pwd.getpwuid(os.getuid()).pw_name
+
+    with tempfile.TemporaryDirectory(prefix="flamenco-greeter-") as tmp:
+        stage = Path(tmp) / user
+        notes = stage_user(stage, cache, user)
+        dest = cache / "users" / user
+
+        # Members of the greeter group can write directly; everyone else goes through sudo once.
+        if os.access(cache, os.W_OK | os.X_OK) and (not dest.exists() or os.access(dest, os.W_OK)):
+            if not dest.exists():
+                dest.mkdir(parents=True)
+                os.chmod(dest, 0o2770)
+            for f in stage.iterdir():
+                existed = (dest / f.name).exists()
+                shutil.copyfile(f, dest / f.name)
+                if not existed:  # files the greeter (or sudo) created stay owned by greeter
+                    os.chmod(dest / f.name, 0o660)
+        elif no_sudo:
+            return die(f"can't write to {cache}; add yourself to the {GREETER_USER} group or run sync without --no-sudo")
+        else:
+            os.chmod(tmp, 0o755)
+            for f in stage.iterdir():
+                os.chmod(f, 0o644)
+            script = (
+                f"set -e; install -d -m 2770 -o {GREETER_USER} -g {GREETER_USER} {shlex.quote(str(cache))} {shlex.quote(str(cache / 'users'))}; "
+                f"rm -rf {shlex.quote(str(dest))}; cp -r {shlex.quote(str(stage))} {shlex.quote(str(dest))}; "
+                f"chown -R {GREETER_USER}:{GREETER_USER} {shlex.quote(str(dest))}; "
+                f"chmod 2770 {shlex.quote(str(dest))}; chmod 660 {shlex.quote(str(dest))}/*"
+            )
+            if not quiet:
+                print(f"Copying to {dest} (needs root)…")
+            if privileged(["sh", "-c", script]) != 0:
+                return die("sync failed")
+
+    if not quiet:
+        print(f"Synced {user} to the login screen:")
+        for n in notes:
+            print("  " + n)
+        try:
+            in_group = grp.getgrnam(GREETER_USER).gr_gid in os.getgroups()
+        except KeyError:
+            in_group = False
+        if not in_group:
+            print(f"\nTip: `sudo usermod -aG {GREETER_USER} {user}` (then log in again) lets sync run without sudo,")
+            print("so the login screen can follow theme changes automatically.")
+    return 0
+
+
+# ── launcher ──
+
+def pick_active_theme(cache: Path) -> str:
+    """Copy the last user's synced settings to where the shell's Settings reads them."""
+    users = cache / "users"
+    mem = read_json(cache / "state" / "memory.json")
+    candidates = []
+    if mem.get("lastUser"):
+        candidates.append(users / mem["lastUser"] / "settings.json")
+    if users.is_dir():
+        candidates += sorted(users.glob("*/settings.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    target = cache / "config" / "flamenco" / "settings.json"
+    for c in candidates:
+        if c.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(c, target)
+            return c.parent.name
+    return ""
+
+
+def cursor_theme_dir(theme: str) -> Path | None:
+    if not theme:
+        return None
+    dirs = [d for d in os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":") if d]
+    for d in [Path(d) / "icons" for d in dirs] + [Path("/usr/share/icons")]:
+        if (d / theme / "cursors").is_dir():
+            return d
+    return None
+
+
+def kdl_str(s: str) -> str:
+    return json.dumps(s)
+
+
+def lua_str(s: str) -> str:
+    return json.dumps(s)
+
+
+def niri_config(base: str, qs_cmd: str, kb: dict, cursor: tuple[str, int] | None) -> str:
+    xkb = "".join(f"            {k} {kdl_str(kb[k])}\n" for k in ("layout", "variant", "options", "model") if kb.get(k))
+    lines = [base.rstrip(), "", "// flamenco-greeter", "hotkey-overlay {\n    skip-at-startup\n}",
+             "prefer-no-csd",
+             "environment {\n    FLAMENCO_GREETER \"1\"\n}",
+             "gestures {\n    hot-corners {\n        off\n    }\n}",
+             "layout {\n    background-color \"#000000\"\n}",
+             "input {\n    keyboard {\n" + (f"        xkb {{\n{xkb}        }}\n" if xkb else "")
+             + f"        repeat-delay {int(kb.get('repeatDelay', 600))}\n        repeat-rate {int(kb.get('repeatRate', 25))}\n"
+             + ("        numlock\n" if kb.get("numlock", True) else "") + "    }\n}"]
+    if cursor:
+        lines.append(f"cursor {{\n    xcursor-theme {kdl_str(cursor[0])}\n    xcursor-size {cursor[1]}\n}}")
+    for override in ("/usr/share/greetd/flamenco-niri.kdl", "/etc/greetd/flamenco-niri.kdl"):
+        if Path(override).exists():
+            lines.append(f"include {kdl_str(override)}")
+    lines.append(f"spawn-at-startup \"sh\" \"-c\" {kdl_str(qs_cmd + '; niri msg action quit --skip-confirmation')}")
+    return "\n".join(lines) + "\n"
+
+
+def hypr_lua_config(base: str, qs_cmd: str, kb: dict) -> str:
+    inp = {"kb_layout": kb.get("layout", ""), "kb_variant": kb.get("variant", ""),
+           "kb_options": kb.get("options", ""), "kb_model": kb.get("model", "")}
+    inp_lua = "".join(f"        {k} = {lua_str(v)},\n" for k, v in inp.items() if v)
+    inp_lua += f"        repeat_delay = {int(kb.get('repeatDelay', 600))},\n        repeat_rate = {int(kb.get('repeatRate', 25))},\n"
+    inp_lua += f"        numlock_by_default = {'true' if kb.get('numlock', True) else 'false'},\n"
+    run = f"sh -c \"{qs_cmd}; hyprctl dispatch 'hl.dsp.exit()'\""
+    return f"""{base.rstrip()}
+
+-- flamenco-greeter
+hl.env("FLAMENCO_GREETER", "1")
+hl.config({{
+    misc = {{
+        disable_hyprland_logo = true,
+        disable_splash_rendering = true,
+    }},
+    input = {{
+{inp_lua}    }},
+}})
+hl.on("hyprland.start", function()
+    hl.exec_cmd({lua_str(run)})
+end)
+"""
+
+
+def hypr_conf_config(base: str, qs_cmd: str, kb: dict) -> str:
+    lines = [base.rstrip(), "", "# flamenco-greeter", "env = FLAMENCO_GREETER,1",
+             "misc {\n    disable_hyprland_logo = true\n    disable_splash_rendering = true\n}", "input {"]
+    for key, field in (("kb_layout", "layout"), ("kb_variant", "variant"), ("kb_options", "options"), ("kb_model", "model")):
+        if kb.get(field):
+            lines.append(f"    {key} = {kb[field]}")
+    lines += [f"    numlock_by_default = {'true' if kb.get('numlock', True) else 'false'}", "}",
+              f"exec-once = sh -c {shlex.quote(qs_cmd + '; hyprctl dispatch exit')}"]
+    return "\n".join(lines) + "\n"
+
+
+def sway_config(base: str, qs_cmd: str, kb: dict) -> str:
+    lines = [base.rstrip(), "", "# flamenco-greeter"]
+    for key, field in (("xkb_layout", "layout"), ("xkb_variant", "variant"), ("xkb_options", "options"), ("xkb_model", "model")):
+        if kb.get(field):
+            lines.append(f"input type:keyboard {key} {shlex.quote(kb[field])}")
+    if kb.get("numlock", True):
+        lines.append("input type:keyboard xkb_numlock enabled")
+    lines.append(f"exec {shlex.quote(qs_cmd + '; swaymsg exit')}")
+    return "\n".join(lines) + "\n"
+
+
+def cmd_launch(args: list[str]) -> int:
+    compositor, base_cfg, path, cache, debug = "", "", None, DEFAULT_CACHE, False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        val = args[i + 1] if i + 1 < len(args) else ""
+        if a == "--command":
+            compositor, i = val, i + 2
+        elif a in ("-C", "--config"):
+            base_cfg, i = val, i + 2
+        elif a in ("-p", "--path"):
+            path, i = Path(val), i + 2
+        elif a == "--cache-dir":
+            cache, i = Path(val), i + 2
+        elif a == "--no-save-session":
+            os.environ["FLAMENCO_GREETER_REMEMBER_SESSION"] = "0"
+            i += 1
+        elif a == "--no-save-username":
+            os.environ["FLAMENCO_GREETER_REMEMBER_USER"] = "0"
+            i += 1
+        elif a == "--debug":
+            debug, i = True, i + 1
+        else:
+            print(__doc__)
+            return die(f"unknown option {a}")
+
+    compositor = {"Hyprland": "hyprland", "start-hyprland": "hyprland"}.get(compositor, compositor)
+    if compositor not in COMPOSITORS:
+        return die(f"--command must be one of: {', '.join(COMPOSITORS)}")
+    qml = path or greeter_dir()
+    if not (qml / "shell.qml").exists():
+        return die(f"no shell.qml in {qml}")
+    qs = qs_bin()
+    if not qs:
+        return die("Quickshell (qs) is not installed")
+    if not cache.is_dir():
+        return die(f"{cache} does not exist; reinstall the package or run `systemd-tmpfiles --create`")
+
+    for sub in ("config", "state", "cache", "data"):
+        (cache / sub).mkdir(parents=True, exist_ok=True)
+    pick_active_theme(cache)
+    settings = read_json(cache / "config" / "flamenco" / "settings.json")
+    kb = settings.get("keyboard") or {}
+    apps = settings.get("apps") or {}
+
+    env = os.environ
+    env.update({
+        "XDG_SESSION_TYPE": "wayland",
+        "QT_QPA_PLATFORM": "wayland",
+        "QT_WAYLAND_DISABLE_WINDOWDECORATION": "1",
+        "EGL_PLATFORM": "gbm",
+        "FLAMENCO_GREETER": "1",
+        "FLAMENCO_GREETER_CACHE": str(cache),
+        "FLAMENCO_GREETER_BIN": str(SELF),
+        "HOME": str(cache),
+        "XDG_CONFIG_HOME": str(cache / "config"),
+        "XDG_STATE_HOME": str(cache / "state"),
+        "XDG_CACHE_HOME": str(cache / "cache"),
+        "XDG_DATA_HOME": str(cache / "data"),
+    })
+    env.setdefault("RUST_LOG", "warn")
+    env.setdefault("NIRI_LOG", "warn")
+    # systems without logind/pam_rundir (e.g. seatd) leave this unset, and compositors refuse to start
+    if not env.get("XDG_RUNTIME_DIR") or not Path(env["XDG_RUNTIME_DIR"]).is_dir():
+        run = cache / "run"
+        run.mkdir(mode=0o700, exist_ok=True)
+        env["XDG_RUNTIME_DIR"] = str(run)
+
+    cursor = None
+    if (cdir := cursor_theme_dir(apps.get("cursorTheme", ""))):
+        cursor = (apps["cursorTheme"], int(apps.get("cursorSize") or 24))
+        env["XCURSOR_PATH"] = str(cdir) + (":" + env["XCURSOR_PATH"] if env.get("XCURSOR_PATH") else "")
+        env["XCURSOR_THEME"], env["XCURSOR_SIZE"] = cursor[0], str(cursor[1])
+
+    qs_cmd = f"{shlex.quote(qs)} -p {shlex.quote(str(qml))}"
+    base = Path(base_cfg).read_text() if base_cfg else ""
+    gen = cache / "state"
+    if compositor == "niri":
+        cfg = gen / "niri.kdl"
+        cfg.write_text(niri_config(base, qs_cmd, kb, cursor))
+        argv = ["niri", "-c", str(cfg)]
+    elif compositor == "hyprland":
+        lua = not base_cfg or base_cfg.endswith(".lua")
+        cfg = gen / ("hyprland.lua" if lua else "hyprland.conf")
+        cfg.write_text(hypr_lua_config(base, qs_cmd, kb) if lua else hypr_conf_config(base, qs_cmd, kb))
+        argv = (["start-hyprland", "--", "--config", str(cfg)] if shutil.which("start-hyprland")
+                else ["Hyprland", "-c", str(cfg)])
+    else:
+        cfg = gen / "sway.conf"
+        cfg.write_text(sway_config(base, qs_cmd, kb))
+        argv = ["sway", "--unsupported-gpu", "-c", str(cfg)]
+
+    if not shutil.which(argv[0]):
+        return die(f"{argv[0]} is not installed")
+    if not debug:
+        # hide leftover console text behind the greeter, then hand logs to the journal
+        try:
+            with open("/dev/tty", "w") as tty:
+                tty.write("\033[2J\033[H\033[3J\033[?25l")
+        except OSError:
+            pass
+        if shutil.which("systemd-cat"):
+            argv = ["systemd-cat", "-t", f"flamenco-greeter/{compositor}", "--"] + argv
+        else:
+            log = os.open(cache / f"{compositor}.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o640)
+            os.dup2(log, 1)
+            os.dup2(log, 2)
+    os.execvpe(argv[0], argv, env)
+
+
+# ── enable / preview / doctor ──
+
+def cmd_enable(args: list[str]) -> int:
+    compositor = args[0] if args else "niri"
+    if compositor not in COMPOSITORS:
+        return die(f"compositor must be one of: {', '.join(COMPOSITORS)}")
+    exe = "/usr/bin/flamenco-greeter" if Path("/usr/bin/flamenco-greeter").exists() else str(SELF)
+    config = (
+        "# written by flamenco-greeter enable\n"
+        "[terminal]\nvt = 1\n\n"
+        "[default_session]\n"
+        f"user = \"{GREETER_USER}\"\n"
+        f"command = \"{exe} --command {compositor}\"\n"
+    )
+    print(f"This writes {GREETD_CONFIG}:\n")
+    print("    " + config.replace("\n", "\n    "))
+    print("and makes greetd the display manager (systemctl enable -f greetd).")
+    if input("Continue? [y/N] ").strip().lower() not in ("y", "yes"):
+        return 1
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    script = (
+        f"set -e; mkdir -p {GREETD_CONFIG.parent}; "
+        f"[ -f {GREETD_CONFIG} ] && cp {GREETD_CONFIG} {GREETD_CONFIG}.bak-{stamp} || true; "
+        f"printf %s {shlex.quote(config)} > {GREETD_CONFIG}; "
+        f"install -d -m 2770 -o {GREETER_USER} -g {GREETER_USER} {DEFAULT_CACHE}; "
+        "systemctl enable -f greetd.service"
+    )
+    if privileged(["sh", "-c", script]) != 0:
+        return die("could not enable greetd")
+    print("\nDone. Run `flamenco-greeter sync` to bring your theme over, then reboot.")
+    return 0
+
+
+def cmd_preview(args: list[str]) -> int:
+    qs = qs_bin()
+    if not qs:
+        return die("Quickshell (qs) is not installed")
+    user = pwd.getpwuid(os.getuid()).pw_name
+    with tempfile.TemporaryDirectory(prefix="flamenco-greeter-preview-") as tmp:
+        cache = Path(tmp)
+        stage_user(cache / "users" / user, cache, user)
+        (cache / "state").mkdir()
+        (cache / "state" / "memory.json").write_text(json.dumps({"lastUser": user}))
+        pick_active_theme(cache)
+        env = dict(os.environ,
+                   FLAMENCO_GREETER="1", FLAMENCO_GREETER_PREVIEW="1",
+                   FLAMENCO_GREETER_CACHE=str(cache), FLAMENCO_GREETER_BIN=str(SELF),
+                   HOME=str(cache), XDG_CONFIG_HOME=str(cache / "config"),
+                   XDG_STATE_HOME=str(cache / "state"), XDG_CACHE_HOME=str(cache / "cache"))
+        return subprocess.call([qs, "-p", str(greeter_dir())] + args, env=env)
+
+
+def cmd_doctor(args: list[str]) -> int:
+    checks = []
+
+    def check(name: str, ok: bool, hint: str = ""):
+        checks.append({"name": name, "ok": ok, "hint": hint})
+
+    check("greetd installed", bool(shutil.which("greetd") or Path("/usr/bin/greetd").exists()), "install greetd")
+    check("Quickshell installed", bool(qs_bin()), "install quickshell")
+    check("a compositor (niri, Hyprland or sway)", any(shutil.which(c) for c in ("niri", "Hyprland", "sway")), "install niri")
+    qml = greeter_dir()
+    check(f"greeter UI at {qml}", (qml / "shell.qml").exists(), "reinstall flamenco-greeter")
+    shared = all((qml / d).exists() for d in ("Commons", "Widgets", "assets"))
+    check("Flamenco Shell components linked", shared, "install flamenco-shell (the greeter reuses its Commons/Widgets)")
+    try:
+        pwd.getpwnam(GREETER_USER)
+        has_user = True
+    except KeyError:
+        has_user = False
+    check(f"'{GREETER_USER}' user exists", has_user, "systemd-sysusers, or reinstall greetd")
+    check(f"{DEFAULT_CACHE} exists", DEFAULT_CACHE.is_dir(), "systemd-tmpfiles --create")
+    me = pwd.getpwuid(os.getuid()).pw_name
+    slot = DEFAULT_CACHE / "users" / me / "settings.json"
+    try:
+        synced = slot.is_file()
+    except PermissionError:
+        synced = False
+    check(f"theme synced for {me}", synced, "flamenco-greeter sync")
+    try:
+        conf = GREETD_CONFIG.read_text()
+        check("greetd uses flamenco-greeter", "flamenco-greeter" in conf, "flamenco-greeter enable")
+    except OSError:
+        check("greetd uses flamenco-greeter", False, "flamenco-greeter enable")
+
+    if "--json" in args:
+        print(json.dumps(checks, indent=2))
+    else:
+        for c in checks:
+            mark = "\033[32m✓\033[0m" if c["ok"] else "\033[31m✗\033[0m"
+            print(f" {mark} {c['name']}" + ("" if c["ok"] else f"  →  {c['hint']}"))
+    return 0 if all(c["ok"] for c in checks) else 1
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    cmd, rest = args[0], args[1:]
+    if cmd in ("-V", "--version", "version"):
+        print(f"flamenco-greeter {VERSION}")
+        return 0
+    if cmd == "users":
+        print(json.dumps(list_users(cache_dir())))
+        return 0
+    if cmd == "sessions":
+        print(json.dumps(list_sessions()))
+        return 0
+    if cmd == "sync":
+        return cmd_sync(rest)
+    if cmd == "enable":
+        return cmd_enable(rest)
+    if cmd == "preview":
+        return cmd_preview(rest)
+    if cmd == "doctor":
+        return cmd_doctor(rest)
+    if cmd.startswith("-"):
+        return cmd_launch(args)
+    print(__doc__)
+    return die(f"unknown command {cmd}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

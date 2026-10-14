@@ -1,0 +1,9 @@
+[Unit]
+Description=Keep the Flamenco login screen in step with your theme
+
+[Path]
+PathChanged=%h/.config/flamenco/settings.json
+Unit=flamenco-greeter-sync.service
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,15 @@
+// /etc/greetd/flamenco-niri.kdl
+//
+// Optional. When this file exists, flamenco-greeter includes it in the niri
+// config it generates for the login screen. Use it for anything the greeter
+// can't take from your synced settings, typically monitor layout:
+
+// output "DP-1" {
+//     mode "2560x1440@165"
+//     scale 1.25
+//     position x=0 y=0
+// }
+//
+// output "eDP-1" {
+//     off
+// }

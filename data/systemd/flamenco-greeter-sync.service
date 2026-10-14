@@ -1,0 +1,8 @@
+[Unit]
+Description=Sync Flamenco theme, wallpaper and avatar to the login screen
+# needs membership in the greeter group, so it never has to ask for a password
+ConditionGroup=greeter
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flamenco-greeter sync --quiet --no-sudo
