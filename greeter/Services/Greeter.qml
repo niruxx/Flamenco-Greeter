@@ -12,6 +12,8 @@ Singleton {
     id: root
 
     readonly property bool preview: Quickshell.env("FLAMENCO_GREETER_PREVIEW") === "1"
+    // in a window instead of full-screen layers: previews, and testing against greetd from a desktop
+    readonly property bool windowed: preview || Quickshell.env("FLAMENCO_GREETER_WINDOWED") === "1"
     readonly property string cacheDir: Quickshell.env("FLAMENCO_GREETER_CACHE") || "/var/cache/flamenco-greeter"
     readonly property string bin: Quickshell.env("FLAMENCO_GREETER_BIN") || "flamenco-greeter"
 
@@ -58,10 +60,19 @@ Singleton {
     property int fingerprintMisses: 0    // listening stops after too many, until the user is picked again
     readonly property int maxMisses: 6
 
+    // ── talking to greetd ──
+    // greetd answers one request at a time, and only once the PAM step behind
+    // it is done. While pam_fprintd waits for a finger it's mid-step, so
+    // anything sent then (a cancel, a new session) queues behind the scan and
+    // its reply arrives late. Quickshell's cancelSession() also reports
+    // Inactive straight away, before greetd has acknowledged, so a session
+    // started right after can mistake that acknowledgement for its own
+    // "success". So: never cancel mid-step (wait for greetd to answer), and
+    // leave a moment between a cancel and the next session.
+    property bool inFlight: false        // greetd owes us a reply
+    property bool cancelWanted: false    // drop the session as soon as greetd answers
     property string mode: ""             // what the current PAM session is for: "fingerprint" | "password"
     property string pendingMode: ""      // the session to start once greetd is idle
-    property bool cancelling: false
-    property string readerState: ""      // "" | "holding" | "held" | "failed"
 
     readonly property string hostName: hostnameFile.text().trim()
 
@@ -93,7 +104,6 @@ Singleton {
     function cancel() {
         pendingMode = "";
         stopSession();
-        releaseReader();
         mode = "";
         scanning = false;
         sawFingerprint = false;
@@ -105,10 +115,14 @@ Singleton {
     }
 
     function stopSession() {
-        if (preview || cancelling || Greetd.state === GreetdState.Inactive)
+        if (preview || Greetd.state === GreetdState.Inactive)
             return;
-        cancelling = true;
-        Greetd.cancelSession();
+        if (inFlight) {
+            cancelWanted = true;     // greetd is busy inside PAM; cancel once it answers
+            return;
+        }
+        cancelWanted = false;
+        Greetd.cancelSession();      // → Inactive → onStateChanged starts any pending session
     }
 
     // Start listening on the reader for the selected user.
@@ -122,25 +136,20 @@ Singleton {
 
     function restart(nextMode) {
         pendingMode = nextMode;
-        if (preview || Greetd.state === GreetdState.Inactive)
-            Qt.callLater(begin);
-        else
-            stopSession();           // begin() runs once greetd reports Inactive
+        if (preview || (Greetd.state === GreetdState.Inactive && !inFlight)) {
+            if (!beginTimer.running)
+                Qt.callLater(begin);
+        } else {
+            stopSession();
+        }
     }
 
     function begin() {
         const m = pendingMode;
         if (!m || username === "" || unlocking)
             return;
-        // A typed password has to get past pam_fprintd. Holding the reader
-        // makes it give up at once, so PAM goes straight to the password.
-        if (m === "password" && fingerprintAvailable && !preview && readerState === "") {
-            readerState = "holding";
-            holder.running = true;
-            return;                  // the holder calls begin() again
-        }
-        if (readerState === "holding")
-            return;
+        if (!preview && (Greetd.state !== GreetdState.Inactive || inFlight))
+            return;                  // still winding down; onStateChanged tries again
         pendingMode = "";
         mode = m;
         passwordSent = false;
@@ -148,10 +157,12 @@ Singleton {
         scanning = false;
         awaitingResponse = false;
         promptText = "";
-        if (preview)
+        if (preview) {
             previewBegin(m);
-        else
+        } else {
+            inFlight = true;
             Greetd.createSession(username);
+        }
     }
 
     function submit() {
@@ -169,21 +180,26 @@ Singleton {
         relistenTimer.stop();
         if (awaitingResponse)
             respond();
-        else
-            restart("password");     // replaces a session that's still on the reader
+        else if (preview && scanning)
+            previewRoundTimer.restart();
+        else if (preview || Greetd.state === GreetdState.Inactive || cancelWanted)
+            restart("password");
+        // otherwise a fingerprint scan is mid-round: the password answers the
+        // prompt it hands over to, and a finger still works in the meantime
     }
 
     function respond() {
         awaitingResponse = false;
         passwordSent = true;
-        if (preview)
+        if (preview) {
             previewTimer.restart();
-        else
+        } else {
+            inFlight = true;
             Greetd.respond(buffer);
+        }
     }
 
     function fail(message) {
-        releaseReader();
         authenticating = false;
         awaitingResponse = false;
         scanning = false;
@@ -197,6 +213,8 @@ Singleton {
 
     // A finger that didn't match: say so, but keep what's typed and keep listening.
     function fingerprintMiss() {
+        if (authenticating)
+            return;                  // a password is already on its way
         fingerprintMisses++;
         if (fingerprintMisses >= maxMisses)
             scanning = false;        // stop offering the reader until the user is picked again
@@ -206,7 +224,6 @@ Singleton {
     }
 
     function succeed() {
-        releaseReader();
         relistenTimer.stop();
         authenticating = false;
         scanning = false;
@@ -216,11 +233,6 @@ Singleton {
         launchTimer.start();
     }
 
-    function releaseReader() {
-        readerState = "";
-        holder.running = false;
-    }
-
     Connections {
         target: Greetd
         enabled: !root.preview
@@ -228,17 +240,25 @@ Singleton {
         function onStateChanged() {
             if (Greetd.state !== GreetdState.Inactive)
                 return;
-            root.cancelling = false;
             root.scanning = false;
             if (root.pendingMode)
-                Qt.callLater(root.begin);
+                beginTimer.restart();
         }
 
         function onAuthMessage(message, error, responseRequired, echoResponse) {
+            if (root.cancelWanted) {
+                // what's left of an attempt being dropped
+                if (responseRequired) {
+                    root.inFlight = false;
+                    root.stopSession();
+                }
+                return;
+            }
             if (!responseRequired) {
-                // Before anything typed is asked for, messages come from the
-                // reader: "place your finger…" (info) or a failed match (error).
-                // PAM's wording is translated and varies, so we use our own.
+                // Quickshell acknowledges these itself, and greetd stays mid-step.
+                // Before anything typed is asked for, they come from the reader:
+                // "place your finger…" (info) or a failed match (error). PAM's
+                // wording is translated and varies, so we use our own.
                 if (root.fingerprintAvailable && !root.passwordSent) {
                     root.sawFingerprint = true;
                     if (error)
@@ -248,10 +268,10 @@ Singleton {
                 } else if (error) {
                     root.errorText = message;
                 }
-                Greetd.respond("");
                 return;
             }
 
+            root.inFlight = false;
             root.scanning = false;
             root.awaitingResponse = true;
             if (!root.passwordSent && !echoResponse) {
@@ -261,7 +281,7 @@ Singleton {
                     root.respond();
                 } else {
                     root.authenticating = false;
-                    // the reader gave up (timed out, or too many misses): listen again,
+                    // the reader gave up (timed out, or a miss): listen again,
                     // unless the user has started typing their password
                     if (root.sawFingerprint)
                         relistenTimer.restart();
@@ -276,42 +296,39 @@ Singleton {
         }
 
         function onAuthFailure(message) {
+            root.inFlight = false;
+            if (root.cancelWanted) {
+                root.cancelWanted = false;
+                return;              // the attempt was being dropped anyway
+            }
             root.fail(/locked|too many|maximum/i.test(message) ? message : root.passwordSent ? "Wrong password" : "Couldn't sign in");
-            root.stopSession();
         }
 
         function onReadyToLaunch() {
+            root.inFlight = false;
+            if (root.cancelWanted) {
+                root.stopSession();  // e.g. a finger for the user that was just switched away from
+                return;
+            }
             root.succeed();
         }
 
         function onError(error) {
+            root.inFlight = false;
+            if (root.cancelWanted) {
+                root.cancelWanted = false;
+                return;
+            }
             root.fail("Login service error");
-            root.stopSession();
         }
     }
 
-    // `flamenco-greeter reader-hold`: claims the reader while a typed password goes through.
-    Process {
-        id: holder
-        command: [root.bin, "reader-hold"]
-        stdinEnabled: true
-        stdout: SplitParser {
-            onRead: line => {
-                if (line === "claimed" && root.readerState === "holding") {
-                    root.readerState = "held";
-                    root.begin();
-                } else if (line.startsWith("failed")) {
-                    console.warn("[Greeter] couldn't hold the reader:", line);
-                }
-            }
-        }
-        onExited: {
-            // couldn't claim it: go ahead anyway, the password is answered once the scan ends
-            if (root.readerState === "holding") {
-                root.readerState = "failed";
-                root.begin();
-            }
-        }
+    // Gap between a cancel and the next session, so greetd's acknowledgement
+    // of the cancel isn't read as the new session's result.
+    Timer {
+        id: beginTimer
+        interval: 500
+        onTriggered: root.begin()
     }
 
     // Start a new round on the reader shortly after one ends without a match.
@@ -365,10 +382,23 @@ Singleton {
     function previewFinger(match) {
         if (!scanning)
             return;
-        if (match)
+        if (match) {
+            previewRoundTimer.stop();
             succeed();
-        else
+        } else {
             fingerprintMiss();
+        }
+    }
+
+    // a password entered mid-scan waits for the round to end, as with pam_fprintd
+    Timer {
+        id: previewRoundTimer
+        interval: 2000
+        onTriggered: {
+            root.scanning = false;
+            root.awaitingResponse = true;
+            root.respond();
+        }
     }
 
     Timer {

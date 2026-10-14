@@ -14,7 +14,6 @@
   flamenco-greeter users --json               login users (used by the greeter UI)
   flamenco-greeter sessions --json            installed desktop sessions (used by the greeter UI)
   flamenco-greeter fingerprint --json         reader + PAM state (used by the greeter UI)
-  flamenco-greeter reader-hold                claim the reader so PAM skips to the password (used by the UI)
 
 Launcher options:
   --command COMPOSITOR      niri, hyprland or sway (required)
@@ -41,7 +40,7 @@ import tempfile
 import time
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 SELF = Path(__file__).resolve()
 DEFAULT_CACHE = Path("/var/cache/flamenco-greeter")
@@ -50,9 +49,10 @@ GREETD_CONFIG = Path("/etc/greetd/config.toml")
 GREETD_PAM = Path("/etc/pam.d/greetd")
 PAM_BEGIN = "# BEGIN flamenco-greeter fingerprint"
 PAM_END = "# END flamenco-greeter fingerprint"
-# timeout: how long one round waits for a finger; the greeter starts a new round
-# after it, so this only bounds the wait when a typed password can't skip the reader
-PAM_FPRINT = "auth       sufficient   pam_fprintd.so max-tries=3 timeout=30"
+# One try per round, and short rounds: greetd can't interrupt pam_fprintd, so a
+# password typed mid-scan waits for the round to end before it's checked. The
+# greeter starts a new round itself whenever one ends (10 s is pam_fprintd's minimum).
+PAM_FPRINT = "auth       sufficient   pam_fprintd.so max-tries=1 timeout=10"
 FPRINT_BUS = "net.reactivated.Fprint"
 COMPOSITORS = ("niri", "hyprland", "sway")
 
@@ -617,6 +617,11 @@ def pam_managed(path: Path = GREETD_PAM) -> bool:
     return PAM_BEGIN in "\n".join(pam_lines(path))
 
 
+def pam_outdated(path: Path = GREETD_PAM) -> bool:
+    """A managed block written by an older version, with different pam_fprintd options."""
+    return pam_managed(path) and PAM_FPRINT not in pam_lines(path)
+
+
 def fprint_readers() -> int | None:
     """Number of fingerprint readers fprintd sees; None when fprintd isn't there."""
     if not shutil.which("gdbus"):
@@ -650,6 +655,7 @@ def fingerprint_state() -> dict:
         "module": pam_module_path("pam_fprintd.so") is not None,
         "pam": pam_has_module(GREETD_PAM, "pam_fprintd"),
         "managed": pam_managed(),
+        "outdated": pam_outdated(),
         "readers": readers or 0,
         "fprintd": readers is not None,
     }
@@ -705,6 +711,7 @@ def cmd_fingerprint(args: list[str]) -> int:
             (f"reader found ({st['readers']})", st["readers"] > 0, "plug in or enable the reader"),
             ("pam_fprintd installed", st["module"], "install fprintd"),
             (f"fingerprint login in {GREETD_PAM}", st["pam"], "flamenco-greeter fingerprint enable"),
+            ("fingerprint settings up to date", not st["outdated"], "flamenco-greeter fingerprint enable"),
             (f"fingers enrolled for {user}", bool(enrolled), "fprintd-enroll"),
         ]
         for name, ok, hint in rows:
@@ -718,8 +725,16 @@ def cmd_fingerprint(args: list[str]) -> int:
             return die(f"{GREETD_PAM} not found; install greetd first")
         if not st["module"]:
             return die("pam_fprintd.so not found; install fprintd")
+        if st["outdated"]:
+            text = pam_with_fingerprint(pam_without_fingerprint(GREETD_PAM.read_text()))
+            if write_pam(text) != 0:
+                return die(f"could not update {GREETD_PAM}")
+            print(f"Fingerprint login updated in {GREETD_PAM} (backup next to it).")
+            return 0
         if st["pam"]:
             print("Fingerprint login is already enabled" + ("." if st["managed"] else " by your own PAM setup; leaving it alone."))
+            if not st["managed"]:
+                print("Tip: short pam_fprintd rounds (max-tries=1 timeout=10) keep typed passwords quick.")
             return 0
         if write_pam(pam_with_fingerprint(GREETD_PAM.read_text())) != 0:
             return die(f"could not update {GREETD_PAM}")
@@ -739,53 +754,6 @@ def cmd_fingerprint(args: list[str]) -> int:
         print("Fingerprint login disabled.")
         return 0
     return die("usage: flamenco-greeter fingerprint status|enable|disable|--json")
-
-
-def cmd_reader_hold(args: list[str]) -> int:
-    """Claim the default reader for the greeter and keep it until stdin closes.
-
-    pam_fprintd can't claim a reader someone else holds, so it gives up at once
-    and PAM moves straight on to the password: that's how a typed password
-    gets past a fingerprint prompt without waiting for the scan to time out."""
-    try:
-        from gi.repository import Gio, GLib
-    except ImportError:
-        print("failed: python-gobject missing", flush=True)
-        return 1
-    try:
-        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-        dev = bus.call_sync(FPRINT_BUS, "/net/reactivated/Fprint/Manager", "net.reactivated.Fprint.Manager",
-                            "GetDefaultDevice", None, GLib.VariantType("(o)"),
-                            Gio.DBusCallFlags.NONE, 3000, None).unpack()[0]
-    except GLib.Error as e:
-        print(f"failed: {e.message}", flush=True)
-        return 1
-
-    def call(method: str, params=None):
-        return bus.call_sync(FPRINT_BUS, dev, "net.reactivated.Fprint.Device", method, params,
-                             None, Gio.DBusCallFlags.NONE, 3000, None)
-
-    # the PAM session we just cancelled may still be letting go of the reader
-    deadline = time.monotonic() + 3
-    while True:
-        try:
-            call("Claim", GLib.Variant("(s)", ("",)))
-            break
-        except GLib.Error as e:
-            if "AlreadyInUse" not in str(e) or time.monotonic() > deadline:
-                print(f"failed: {e.message}", flush=True)
-                return 1
-            time.sleep(0.1)
-    print("claimed", flush=True)
-    try:
-        sys.stdin.read()
-    except KeyboardInterrupt:
-        pass
-    try:
-        call("Release")
-    except GLib.Error:
-        pass  # fprintd also releases it when this process goes away
-    return 0
 
 
 # ── enable / preview / doctor ──
@@ -942,8 +910,6 @@ def main() -> int:
         return cmd_sync(rest)
     if cmd == "fingerprint":
         return cmd_fingerprint(rest)
-    if cmd == "reader-hold":
-        return cmd_reader_hold(rest)
     if cmd == "enable":
         return cmd_enable(rest)
     if cmd == "preview":

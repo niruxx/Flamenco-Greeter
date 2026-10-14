@@ -8,5 +8,9 @@ post_install() {
 }
 
 post_upgrade() {
+    # refresh the fingerprint block flamenco-greeter manages in /etc/pam.d/greetd (no-op when current)
+    if grep -q "BEGIN flamenco-greeter fingerprint" /etc/pam.d/greetd 2>/dev/null; then
+        flamenco-greeter fingerprint enable
+    fi
     echo ">> Flamenco Greeter upgraded. The new version shows at the next login screen."
 }

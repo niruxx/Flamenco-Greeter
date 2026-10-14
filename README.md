@@ -7,7 +7,7 @@
 </picture>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-E8466F?style=for-the-badge" alt="Version 0.2.0">
+  <img src="https://img.shields.io/badge/version-0.2.1-E8466F?style=for-the-badge" alt="Version 0.2.1">
   <img src="https://img.shields.io/badge/greetd-greeter-FFB867?style=for-the-badge" alt="greetd greeter">
   <img src="https://img.shields.io/badge/Quickshell-0.3.2-FF5722?style=for-the-badge&logo=qt&logoColor=white" alt="Quickshell 0.3.2">
   <img src="https://img.shields.io/badge/Material%20Design-3-6750A4?style=for-the-badge&logo=materialdesign&logoColor=white" alt="Material Design 3">
@@ -42,7 +42,7 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
     </td>
     <td width="33%" valign="top">
       <h3>👆 Fingerprint ready</h3>
-      The reader starts listening as soon as you're picked. A typed password always works too, with no waiting for the scan.
+      The reader starts listening as soon as you're picked. A typed password always works too, and a finger still wins while it's checked.
     </td>
   </tr>
   <tr>
@@ -138,7 +138,7 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
 | 🖥️ **Session chooser** | Every installed Wayland session, plus X11 sessions when `startx` is available. niri is preselected the first time. |
 | 🧠 **Remembers you** | The last user and session are preselected next time. Turn this off with `--no-save-username` / `--no-save-session`. |
 | ⌨️ **Your keyboard & cursor** | Layout, variant, options, repeat rate, numlock and cursor theme are applied to the greeter's compositor, so your password types the same as on the desktop. |
-| 👆 **Fingerprint** | With fprintd: the reader listens as soon as a user is picked, "Scan your finger on the reader" appears, and a typed password skips the scan instantly. |
+| 👆 **Fingerprint** | With fprintd: the reader listens as soon as a user is picked, "Scan your finger on the reader" appears, and a typed password goes in as soon as the current scan ends. |
 | 🔐 **Extra PAM prompts** | One-time codes, token PINs and lockout notices show up in the password field. |
 | 🪟 **niri, Hyprland or sway** | The compositor config is generated at every start. Your own monitor layout can be included. |
 | 🖥️ **Multi-monitor** | Every screen gets the wallpaper and clock. The first screen gets the login card. |
@@ -149,15 +149,15 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
 
 ## 🚀 Install
 
-**Requirements:** [Flamenco Shell](https://github.com/niruxx/flamenco-shell) (the greeter reuses its theme code), `greetd`, `quickshell`, `python`, `python-gobject`, and a compositor (`niri`, `hyprland` or `sway`). Optional: `fprintd` for fingerprint login, `matugen` for wallpaper colors, `upower` for the battery indicator.
+**Requirements:** [Flamenco Shell](https://github.com/niruxx/flamenco-shell) (the greeter reuses its theme code), `greetd`, `quickshell`, `python`, and a compositor (`niri`, `hyprland` or `sway`). Optional: `fprintd` for fingerprint login, `matugen` for wallpaper colors, `upower` for the battery indicator.
 
 ### 📦 Option 1: the prebuilt package (Arch Linux)
 
 Every release is kept under [`History Builds/`](History%20Builds), one folder per version:
 
 ```sh
-sudo pacman -S --needed greetd quickshell python-gobject niri   # if not installed yet
-sudo pacman -U "History Builds/flamenco-greeter-0.2.0-1/flamenco-greeter-0.2.0-1-any.pkg.tar.zst"
+sudo pacman -S --needed greetd quickshell niri   # if not installed yet
+sudo pacman -U "History Builds/flamenco-greeter-0.2.1-1/flamenco-greeter-0.2.1-1-any.pkg.tar.zst"
 ```
 
 Pacman's systemd hooks create the `greeter` user and the `/var/cache/flamenco-greeter` data folder automatically.
@@ -321,7 +321,7 @@ flamenco-greeter fingerprint status    # reader, PAM and enrolled fingers at a g
 - 👆 **Picked users are checked right away.** The greeter starts a PAM login as soon as a user is selected. If that user has fingers enrolled, the reader starts and the field reads **"Scan your finger on the reader"**. Users without fingers simply see the password field.
 - ❌ **Missed scans keep your typing.** A finger that doesn't match shakes the field and shows *Fingerprint not recognized*, without clearing what you've typed. After six misses the reader rests until the user is picked again.
 - 🔁 **It keeps listening.** When a scan times out, a new one starts, so the reader is always ready while the screen is idle.
-- ⌨️ **Passwords never wait.** Pressing Enter on a typed password briefly claims the reader, so PAM skips straight to checking your password.
+- ⌨️ **Passwords always work.** greetd can't interrupt a scan, so a password typed while the reader listens goes in the moment the current round ends (rounds are 10 seconds), with *Finishing the fingerprint scan…* shown meanwhile. Touching the reader still logs you in straight away.
 
 > [!NOTE]
 > The greeter never asks fprintd about other users' fingers. That would need a polkit right that would also let the login screen *enroll* fingers for anyone. `pam_fprintd` does the check itself, as root.
@@ -366,7 +366,7 @@ Run `flamenco-greeter fingerprint status`: it checks that fprintd runs, a reader
 <details>
 <summary><b>A typed password waits a while when fingerprint login is on</b></summary>
 
-The greeter couldn't claim the reader (look for "couldn't hold the reader" in the journal), so the password is sent once the scan round ends, after up to 30 seconds.
+A password typed during a scan is checked when that scan round ends, up to 10 seconds later. If it takes much longer, your PAM setup still uses longer rounds: run `flamenco-greeter fingerprint status`, then `flamenco-greeter fingerprint enable` to update it. If `pam_fprintd` comes from your own PAM config, give it `max-tries=1 timeout=10`.
 </details>
 
 <details>
@@ -440,6 +440,7 @@ qs -p greeter ipc call greeter finger true     # with --fingerprint: a matching 
 
 | Tool | |
 |---|---|
+| `tools/test-login.sh` | Run log-in scenarios (password, fingerprint, both at once) against `tools/mock-greetd.py` |
 | `tools/screenshots.sh` | Capture the README screenshots (KDE Spectacle or niri) |
 | `tools/readme-assets.py` | Redraw the banners and diagram from the shell's palettes |
 | `packaging/arch/build-local.sh` | Build the Arch package into `History Builds/` |

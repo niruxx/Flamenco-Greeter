@@ -29,12 +29,12 @@ ShellRoot {
     }
 
     Loader {
-        active: !Greeter.preview
+        active: !Greeter.windowed
         sourceComponent: GreeterSurface {}
     }
 
     Loader {
-        active: Greeter.preview
+        active: Greeter.windowed
         sourceComponent: PreviewWindow {}
     }
 }

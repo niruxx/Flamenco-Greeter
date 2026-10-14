@@ -233,6 +233,8 @@ Item {
             readonly property bool echo: Greeter.promptText !== "" && Greeter.promptEcho
             // the reader is listening and nothing's typed yet
             readonly property bool fingerprint: Greeter.scanning && Greeter.buffer === "" && !Greeter.authenticating
+            // a password was entered mid-scan and goes in when the round ends
+            readonly property bool waiting: Greeter.scanning && Greeter.authenticating
 
             // shake on failure
             transform: Translate { id: shake }
@@ -349,10 +351,10 @@ Item {
                 anchors.top: parent.bottom
                 anchors.topMargin: Theme.sp2
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "or type your password"
+                text: field.waiting ? "Finishing the fingerprint scan…" : "or type your password"
                 dim: true
                 font.pixelSize: Theme.fsSm
-                opacity: field.fingerprint ? 1 : 0
+                opacity: field.fingerprint || field.waiting ? 1 : 0
                 Behavior on opacity { Anim { duration: Theme.durShort } }
             }
 
@@ -477,10 +479,11 @@ Item {
     // preview only: `qs -p … ipc call greeter …` for screenshots and testing
     IpcHandler {
         target: "greeter"
-        enabled: Greeter.preview && root.primary
+        enabled: Greeter.windowed && root.primary
         function menu(name: string): void { root.menu = name; }
         function type(text: string): void { Greeter.buffer = text; }
         function submit(): void { Greeter.submit(); }
+        function reset(): void { Greeter.reset(); }
         // with `preview --fingerprint`: touch the fake reader
         function finger(match: bool): void { Greeter.previewFinger(match); }
     }
