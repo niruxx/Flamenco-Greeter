@@ -51,7 +51,7 @@ Rectangle {
                     anchors.rightMargin: Theme.sp3
                     spacing: Theme.sp3
 
-                    Avatar {
+                    GreeterAvatar {
                         visible: root.avatars && !row.modelData.icon
                         size: 34
                         source: row.modelData.avatar ?? ""

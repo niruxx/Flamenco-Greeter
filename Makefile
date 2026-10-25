@@ -4,12 +4,13 @@ SHARE     := $(DESTDIR)$(PREFIX)/share/flamenco-greeter
 BIN       := $(DESTDIR)$(PREFIX)/bin
 
 # Flamenco Shell's QML tree. The greeter links its Commons/, Widgets/, assets/
-# and Services/Time.qml so the login screen uses the shell's exact theme code.
+# and the Time + Weather services so the login screen uses the shell's exact code.
 SHELL_DIR ?= $(PREFIX)/share/flamenco-shell/shell
 # For `make dev`: a flamenco-shell checkout next to this one.
 DEV_SHELL ?= $(abspath ../flamenco-shell/shell)
 
 SHARED    := Commons Widgets assets
+SERVICES  := Time Weather
 
 .PHONY: dev unlink install uninstall preview check
 
@@ -17,11 +18,11 @@ SHARED    := Commons Widgets assets
 dev:
 	@test -f $(DEV_SHELL)/Commons/Theme.qml || { echo "No Flamenco Shell at $(DEV_SHELL); pass DEV_SHELL=/path/to/flamenco-shell/shell"; exit 1; }
 	@for d in $(SHARED); do ln -sfn $(DEV_SHELL)/$$d greeter/$$d; done
-	@ln -sf $(DEV_SHELL)/Services/Time.qml greeter/Services/Time.qml
-	@echo "Linked greeter/{$(shell echo $(SHARED) | tr ' ' ,)} and Services/Time.qml -> $(DEV_SHELL)"
+	@for s in $(SERVICES); do ln -sf $(DEV_SHELL)/Services/$$s.qml greeter/Services/$$s.qml; done
+	@echo "Linked greeter/{$(shell echo $(SHARED) | tr ' ' ,)} and Services/{$(shell echo $(SERVICES) | tr ' ' ,)}.qml -> $(DEV_SHELL)"
 
 unlink:
-	rm -f $(addprefix greeter/,$(SHARED)) greeter/Services/Time.qml
+	rm -f $(addprefix greeter/,$(SHARED)) $(foreach s,$(SERVICES),greeter/Services/$(s).qml)
 
 preview: dev
 	./bin/flamenco-greeter preview
@@ -33,9 +34,9 @@ check:
 install:
 	install -d $(SHARE)/greeter
 	cp -r --no-preserve=ownership greeter/shell.qml greeter/Modules greeter/Services $(SHARE)/greeter/
-	rm -f $(SHARE)/greeter/Services/Time.qml
+	rm -f $(foreach s,$(SERVICES),$(SHARE)/greeter/Services/$(s).qml)
 	@for d in $(SHARED); do rm -rf $(SHARE)/greeter/$$d; ln -s $(SHELL_DIR)/$$d $(SHARE)/greeter/$$d; done
-	ln -s $(SHELL_DIR)/Services/Time.qml $(SHARE)/greeter/Services/Time.qml
+	@for s in $(SERVICES); do ln -s $(SHELL_DIR)/Services/$$s.qml $(SHARE)/greeter/Services/$$s.qml; done
 	find $(SHARE) -type f -exec chmod 644 {} +
 	find $(SHARE) -type d -exec chmod 755 {} +
 	install -Dm755 bin/flamenco-greeter $(BIN)/flamenco-greeter

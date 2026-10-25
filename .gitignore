@@ -10,6 +10,7 @@ greeter/Commons
 greeter/Widgets
 greeter/assets
 greeter/Services/Time.qml
+greeter/Services/Weather.qml
 
 # keep released packages
 !History Builds/**/*.pkg.tar.zst

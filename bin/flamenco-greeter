@@ -9,8 +9,10 @@
       --palette NAME            try another palette (or "wallpaper")
       --mode dark|light         try the other color mode
       --wallpaper PATH          try another wallpaper
+      --widgets FILE            start with this widgets.json (default: the login screen's own)
   flamenco-greeter fingerprint status|enable|disable   fingerprint login (pam_fprintd in /etc/pam.d/greetd)
-  flamenco-greeter doctor [--json]            check the setup
+  flamenco-greeter widgets list|lock|unlock|reset      login-screen widgets (hold the background to edit)
+  flamenco-greeter doctor [--json]            check everything the login screen needs (alias: check)
   flamenco-greeter users --json               login users (used by the greeter UI)
   flamenco-greeter sessions --json            installed desktop sessions (used by the greeter UI)
   flamenco-greeter fingerprint --json         reader + PAM state (used by the greeter UI)
@@ -28,6 +30,7 @@ Launcher options:
 from __future__ import annotations
 
 import grp
+import hashlib
 import json
 import os
 import pwd
@@ -40,7 +43,7 @@ import tempfile
 import time
 from pathlib import Path
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 SELF = Path(__file__).resolve()
 DEFAULT_CACHE = Path("/var/cache/flamenco-greeter")
@@ -54,6 +57,8 @@ PAM_END = "# END flamenco-greeter fingerprint"
 # greeter starts a new round itself whenever one ends (10 s is pam_fprintd's minimum).
 PAM_FPRINT = "auth       sufficient   pam_fprintd.so max-tries=1 timeout=10"
 FPRINT_BUS = "net.reactivated.Fprint"
+NIRI_OVERRIDES = ("/usr/share/greetd/flamenco-niri.kdl", "/etc/greetd/flamenco-niri.kdl")
+OTHER_DMS = ("sddm", "gdm", "lightdm", "ly", "lxdm", "xdm", "emptty", "cosmic-greeter", "plasmalogin", "lemurs")
 COMPOSITORS = ("niri", "hyprland", "sway")
 
 # Settings sections the login screen reads. Everything else in the user's
@@ -393,7 +398,7 @@ def lua_str(s: str) -> str:
     return json.dumps(s)
 
 
-def niri_config(base: str, qs_cmd: str, kb: dict, cursor: tuple[str, int] | None) -> str:
+def niri_config(base: str, qs_cmd: str, kb: dict, cursor: tuple[str, int] | None, overrides: bool = True) -> str:
     xkb = "".join(f"            {k} {kdl_str(kb[k])}\n" for k in ("layout", "variant", "options", "model") if kb.get(k))
     lines = [base.rstrip(), "", "// flamenco-greeter", "hotkey-overlay {\n    skip-at-startup\n}",
              "prefer-no-csd",
@@ -405,7 +410,7 @@ def niri_config(base: str, qs_cmd: str, kb: dict, cursor: tuple[str, int] | None
              + ("        numlock\n" if kb.get("numlock", True) else "") + "    }\n}"]
     if cursor:
         lines.append(f"cursor {{\n    xcursor-theme {kdl_str(cursor[0])}\n    xcursor-size {cursor[1]}\n}}")
-    for override in ("/usr/share/greetd/flamenco-niri.kdl", "/etc/greetd/flamenco-niri.kdl"):
+    for override in NIRI_OVERRIDES if overrides else ():
         if Path(override).exists():
             lines.append(f"include {kdl_str(override)}")
     lines.append(f"spawn-at-startup \"sh\" \"-c\" {kdl_str(qs_cmd + '; niri msg action quit --skip-confirmation')}")
@@ -488,17 +493,31 @@ def cmd_launch(args: list[str]) -> int:
     compositor = {"Hyprland": "hyprland", "start-hyprland": "hyprland"}.get(compositor, compositor)
     if compositor not in COMPOSITORS:
         return die(f"--command must be one of: {', '.join(COMPOSITORS)}")
+    # Anything that would stop the UI from coming up falls back to a text
+    # login with the reason on screen; exiting instead would have greetd
+    # restart us straight away: a black screen that keeps retrying.
     qml = path or greeter_dir()
-    if not (qml / "shell.qml").exists():
-        return die(f"no shell.qml in {qml}")
-    qs = qs_bin()
-    if not qs:
-        return die("Quickshell (qs) is not installed")
     if not cache.is_dir():
-        return die(f"{cache} does not exist; reinstall the package or run `systemd-tmpfiles --create`")
-
+        return text_login(f"{cache} doesn't exist (reinstall, or run `systemd-tmpfiles --create`)", cache)
     for sub in ("config", "state", "cache", "data"):
         (cache / sub).mkdir(parents=True, exist_ok=True)
+    if not (qml / "shell.qml").exists():
+        return text_login(f"its interface is missing ({qml})", cache)
+    qs = qs_bin()
+    if not qs:
+        return text_login("Quickshell (qs) is not installed", cache)
+    compositor_bin = {"niri": "niri", "hyprland": "Hyprland", "sway": "sway"}[compositor]
+    if not shutil.which(compositor_bin) and not (compositor == "hyprland" and shutil.which("start-hyprland")):
+        return text_login(f"{compositor_bin} is not installed", cache)
+
+    crashes = recent_crashes(cache)
+    if len(crashes) >= CRASH_LIMIT:
+        clear_crashes(cache)     # the next start gets a fresh try
+        return text_login(f"the login screen crashed {len(crashes)} times in a row", cache)
+    ok, why = ui_loads(qml, cache)
+    if not ok:
+        return text_login(f"its interface doesn't load: {why}", cache)
+
     pick_active_theme(cache)
     settings = read_json(cache / "config" / "flamenco" / "settings.json")
     kb = settings.get("keyboard") or {}
@@ -509,7 +528,6 @@ def cmd_launch(args: list[str]) -> int:
         "XDG_SESSION_TYPE": "wayland",
         "QT_QPA_PLATFORM": "wayland",
         "QT_WAYLAND_DISABLE_WINDOWDECORATION": "1",
-        "EGL_PLATFORM": "gbm",
         "FLAMENCO_GREETER": "1",
         "FLAMENCO_GREETER_CACHE": str(cache),
         "FLAMENCO_GREETER_BIN": str(SELF),
@@ -519,6 +537,9 @@ def cmd_launch(args: list[str]) -> int:
         "XDG_CACHE_HOME": str(cache / "cache"),
         "XDG_DATA_HOME": str(cache / "data"),
     })
+    # on the bare GPU, as greetd runs it; not when nested in a desktop for testing
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        env["EGL_PLATFORM"] = "gbm"
     env.setdefault("RUST_LOG", "warn")
     env.setdefault("NIRI_LOG", "warn")
     # systems without logind/pam_rundir (e.g. seatd) leave this unset, and compositors refuse to start
@@ -533,12 +554,24 @@ def cmd_launch(args: list[str]) -> int:
         env["XCURSOR_PATH"] = str(cdir) + (":" + env["XCURSOR_PATH"] if env.get("XCURSOR_PATH") else "")
         env["XCURSOR_THEME"], env["XCURSOR_SIZE"] = cursor[0], str(cursor[1])
 
-    qs_cmd = f"{shlex.quote(qs)} -p {shlex.quote(str(qml))}"
-    base = Path(base_cfg).read_text() if base_cfg else ""
+    qs_cmd = "sh " + shlex.quote(str(write_runner(cache, qs, qml)))
+    try:
+        base = Path(base_cfg).read_text() if base_cfg else ""
+    except OSError as e:
+        print(f"flamenco-greeter: ignoring -C {base_cfg}: {e}", file=sys.stderr)
+        base = ""
     gen = cache / "state"
     if compositor == "niri":
         cfg = gen / "niri.kdl"
         cfg.write_text(niri_config(base, qs_cmd, kb, cursor))
+        problem = niri_invalid(cfg)
+        if problem:
+            # usually a mistake in -C or /etc/greetd/flamenco-niri.kdl: start without them
+            print(f"flamenco-greeter: niri config invalid ({problem}); retrying without -C and overrides", file=sys.stderr)
+            cfg.write_text(niri_config("", qs_cmd, kb, cursor, overrides=False))
+            problem = niri_invalid(cfg)
+            if problem:
+                return text_login(f"its niri config is invalid: {problem}", cache)
         argv = ["niri", "-c", str(cfg)]
     elif compositor == "hyprland":
         lua = not base_cfg or base_cfg.endswith(".lua")
@@ -551,8 +584,6 @@ def cmd_launch(args: list[str]) -> int:
         cfg.write_text(sway_config(base, qs_cmd, kb))
         argv = ["sway", "--unsupported-gpu", "-c", str(cfg)]
 
-    if not shutil.which(argv[0]):
-        return die(f"{argv[0]} is not installed")
     if not debug:
         # hide leftover console text behind the greeter, then hand logs to the journal
         try:
@@ -756,6 +787,217 @@ def cmd_fingerprint(args: list[str]) -> int:
     return die("usage: flamenco-greeter fingerprint status|enable|disable|--json")
 
 
+# ── health ──
+#
+# A broken greeter (most often: Flamenco Shell updated in a way this version
+# doesn't expect) makes Quickshell exit at once; niri then quits and greetd
+# starts it all again — a black screen that keeps retrying. So the launcher
+# test-loads the UI off-screen before starting the compositor, counts crashes,
+# and falls back to greetd's text login (agreety) with the reason on screen.
+
+SHARED_LINKS = ("Commons", "Widgets", "assets", "Services/Time.qml", "Services/Weather.qml")
+CRASH_LIMIT, CRASH_WINDOW = 3, 300      # this many crashes within this many seconds → text login
+
+
+def strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+
+
+def run_out(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return -1, "", str(e)
+
+
+def qml_check(qml: Path, timeout: int = 25) -> tuple[bool, list[str]]:
+    """Load the greeter UI off-screen (no display needed) and report QML errors."""
+    qs = qs_bin()
+    if not qs:
+        return False, ["Quickshell (qs) is not installed"]
+    with tempfile.TemporaryDirectory(prefix="flamenco-greeter-check-") as tmp:
+        env = {k: v for k, v in os.environ.items() if k not in ("WAYLAND_DISPLAY", "DISPLAY", "QT_QPA_PLATFORM")}
+        env.update({
+            "HOME": tmp, "XDG_CONFIG_HOME": f"{tmp}/config", "XDG_STATE_HOME": f"{tmp}/state",
+            "XDG_CACHE_HOME": f"{tmp}/cache", "XDG_DATA_HOME": f"{tmp}/data",
+            "QT_QPA_PLATFORM": "offscreen", "FLAMENCO_GREETER_CHECK": "1", "FLAMENCO_GREETER_WINDOWED": "1",
+            "FLAMENCO_GREETER_CACHE": tmp, "FLAMENCO_GREETER_BIN": str(SELF),
+        })
+        if not env.get("XDG_RUNTIME_DIR") or not os.access(env["XDG_RUNTIME_DIR"], os.W_OK):
+            env["XDG_RUNTIME_DIR"] = tmp
+        try:
+            r = subprocess.run([qs, "-p", str(qml)], env=env, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, [f"it didn't finish loading within {timeout} s"]
+        except OSError as e:
+            return False, [str(e)]
+    text = strip_ansi(r.stdout + r.stderr)
+    if r.returncode == 0 and "flamenco-greeter-check: loaded" in text:
+        return True, []
+    errors = [l.split("ERROR:", 1)[1].strip() for l in text.splitlines() if "ERROR:" in l]
+    errors = [e for e in errors if e] or [l.strip() for l in text.splitlines() if l.strip()][-5:]
+    return False, errors[:8] or [f"qs exited with {r.returncode}"]
+
+
+def ui_key(qml: Path) -> str:
+    """Changes whenever the greeter, the linked Flamenco Shell files or Quickshell change."""
+    h = hashlib.sha1(run_out([qs_bin() or "qs", "--version"])[1].encode())
+    for dirpath, dirs, files in os.walk(qml, followlinks=True):
+        dirs.sort()
+        for f in sorted(files):
+            if f.endswith((".qml", ".js")):
+                try:
+                    st = (Path(dirpath) / f).stat()
+                    h.update(f"{dirpath}/{f}:{st.st_mtime_ns}:{st.st_size}".encode())
+                except OSError:
+                    pass
+    return h.hexdigest()
+
+
+def ui_loads(qml: Path, cache: Path) -> tuple[bool, str]:
+    """qml_check, remembered while nothing changes (only successes are kept)."""
+    key = ui_key(qml)
+    memo = cache / "state" / "ui-check.json"
+    if read_json(memo).get("key") == key:
+        return True, ""
+    ok, errors = qml_check(qml)
+    if ok:
+        try:
+            memo.write_text(json.dumps({"key": key, "time": int(time.time())}))
+        except OSError:
+            pass
+        return True, ""
+    why = errors[-1] if errors else "unknown error"
+    return False, why if len(why) <= 160 else why[:157] + "…"
+
+
+def crash_times(cache: Path) -> list[int]:
+    try:
+        return [int(l) for l in (cache / "state" / "failures").read_text().split() if l.isdigit()]
+    except OSError:
+        return []
+
+
+def recent_crashes(cache: Path, window: int = CRASH_WINDOW) -> list[int]:
+    now = time.time()
+    return [t for t in crash_times(cache) if now - t < window]
+
+
+def clear_crashes(cache: Path) -> None:
+    try:
+        (cache / "state" / "failures").unlink()
+    except OSError:
+        pass
+
+
+def write_runner(cache: Path, qs: str, qml: Path) -> Path:
+    """The script the compositor runs: the UI, plus a note of each crash.
+    (A script rather than inline shell keeps `$` out of niri/Hyprland/sway configs.)"""
+    fails = shlex.quote(str(cache / "state" / "failures"))
+    runner = cache / "state" / "run-greeter.sh"
+    runner.write_text(f"""#!/bin/sh
+# Written by flamenco-greeter at every start. Runs the login screen and notes
+# crashes, so the launcher can offer a text login instead of a black screen.
+{shlex.quote(qs)} -p {shlex.quote(str(qml))}
+code=$?
+# 0: a session was started; 143: stopped for shutdown
+if [ "$code" -ne 0 ] && [ "$code" -ne 143 ]; then date +%s >> {fails}; else rm -f {fails}; fi
+exit "$code"
+""")
+    runner.chmod(0o755)
+    return runner
+
+
+def niri_invalid(cfg: Path) -> str:
+    """'' when niri accepts the config, else its complaint."""
+    code, out, err = run_out(["niri", "validate", "-c", str(cfg)])
+    if code == 0:
+        return ""
+    lines = [l.strip() for l in strip_ansi(out + "\n" + err).splitlines()
+             if l.strip() and " INFO " not in l and " DEBUG " not in l]
+    return lines[-1] if lines else f"niri validate exited with {code}"
+
+
+def fallback_command(cache: Path) -> str:
+    """What the text login starts: the remembered session, else the first one, else a shell."""
+    sessions = list_sessions()
+    last = read_json(cache / "state" / "memory.json").get("lastSession", "")
+    s = next((x for x in sessions if x["id"] == last), sessions[0] if sessions else None)
+    return " ".join(shlex.quote(a) for a in s["command"]) if s else "/bin/sh -l"
+
+
+def text_login(reason: str, cache: Path) -> int:
+    """Fall back to greetd's text greeter, saying why, instead of looping on a black screen."""
+    print(f"flamenco-greeter: falling back to a text login: {reason}", file=sys.stderr)
+    try:
+        with open(cache / "state" / "fallback", "a") as f:
+            f.write(f"{int(time.time())} {reason}\n")
+    except OSError:
+        pass
+    try:
+        with open("/dev/tty", "w") as tty:
+            tty.write("\033[2J\033[H\033[?25h\n"
+                      f"  Flamenco Greeter couldn't start: {reason}\n\n"
+                      "  Log in below. Afterwards, run `flamenco-greeter doctor` to see what's wrong.\n\n")
+    except OSError:
+        pass
+    agreety = shutil.which("agreety")
+    if not agreety:
+        time.sleep(30)   # nothing better to offer; at least don't spin
+        return 1
+    os.execvp(agreety, [agreety, "--cmd", fallback_command(cache)])
+    return 1
+
+
+# ── widgets ──
+
+def write_greeter_file(path: Path, text: str) -> int:
+    """Write a file in the greeter's data folder (directly if we may, else through sudo)."""
+    if os.access(path.parent, os.W_OK) and (not path.exists() or os.access(path, os.W_OK)):
+        path.write_text(text)
+        return 0
+    with tempfile.NamedTemporaryFile("w", prefix="flamenco-greeter-", delete=False) as f:
+        f.write(text)
+        tmp = f.name
+    os.chmod(tmp, 0o644)
+    try:
+        return privileged(["install", "-m", "660", "-o", GREETER_USER, "-g", GREETER_USER, tmp, str(path)])
+    finally:
+        os.unlink(tmp)
+
+
+def cmd_widgets(args: list[str]) -> int:
+    action = args[0] if args else "list"
+    path = DEFAULT_CACHE / "state" / "widgets.json"
+    if not can_read(path.parent):
+        return die(f"can't read {path.parent}: join the {GREETER_USER} group, or use sudo")
+    data = read_json(path)
+    data.setdefault("widgets", [])
+    data.setdefault("locked", False)
+    if action == "list":
+        if not data["widgets"]:
+            print("No widgets yet. Press and hold the login screen's background to add some.")
+        for w in data["widgets"]:
+            extra = w.get("config", {}).get("city") or w.get("config", {}).get("text", "")[:40]
+            print(f"  {w['type']:<9} at {w['x']:.2f}, {w['y']:.2f}" + (f"  ({extra})" if extra else ""))
+        print("Editing is locked." if data["locked"] else "Editing: press and hold the background.")
+        return 0
+    if action in ("lock", "unlock"):
+        data["locked"] = action == "lock"
+    elif action == "reset":
+        data["widgets"] = []
+    else:
+        return die("usage: flamenco-greeter widgets list|lock|unlock|reset")
+    if write_greeter_file(path, json.dumps(data, indent=2)) != 0:
+        return die(f"couldn't write {path}")
+    print({"lock": "Widget editing locked: holding the login screen does nothing now.",
+           "unlock": "Widget editing unlocked: press and hold the login screen's background to edit.",
+           "reset": "All login-screen widgets removed."}[action])
+    print("Takes effect at the next login screen.")
+    return 0
+
+
 # ── enable / preview / doctor ──
 
 def cmd_enable(args: list[str]) -> int:
@@ -798,7 +1040,7 @@ def cmd_preview(args: list[str]) -> int:
     overrides, rest, i = {}, [], 0
     while i < len(args):
         a = args[i]
-        if a in ("--palette", "--mode", "--wallpaper") and i + 1 < len(args):
+        if a in ("--palette", "--mode", "--wallpaper", "--widgets") and i + 1 < len(args):
             overrides[a[2:]] = args[i + 1]
             i += 2
         else:
@@ -832,6 +1074,12 @@ def cmd_preview(args: list[str]) -> int:
             (slot / "settings.json").write_text(json.dumps(data, indent=2))
         (cache / "state").mkdir()
         (cache / "state" / "memory.json").write_text(json.dumps({"lastUser": user}))
+        # widgets: the given layout, else a copy of the real login screen's (edits stay in the preview)
+        layout = Path(overrides["widgets"]) if "widgets" in overrides else DEFAULT_CACHE / "state" / "widgets.json"
+        if can_read(layout) and layout.is_file():
+            shutil.copyfile(layout, cache / "state" / "widgets.json")
+        elif "widgets" in overrides:
+            return die(f"can't read {layout}")
         pick_active_theme(cache)
         env = dict(os.environ,
                    FLAMENCO_GREETER="1", FLAMENCO_GREETER_PREVIEW="1",
@@ -842,53 +1090,520 @@ def cmd_preview(args: list[str]) -> int:
         return subprocess.call([qs, "-p", str(greeter_dir())] + args, env=env)
 
 
-def cmd_doctor(args: list[str]) -> int:
-    checks = []
+# ── doctor ──
+#
+# Everything the login screen needs, from packages to greetd's service state,
+# in the spirit of `flutter doctor`: grouped checks, each ✓ ✗ ! or ·, with the
+# next step under anything that's wrong. Meant to be run from a TTY when the
+# login screen is black: `sudo flamenco-greeter doctor` also reads the logs
+# and the greeter's data folder.
 
-    def check(name: str, ok: bool, hint: str = ""):
-        checks.append({"name": name, "ok": ok, "hint": hint})
+class Report:
+    MARKS = {"ok": "✓", "err": "✗", "warn": "!", "info": "·"}
+    COLORS = {"ok": "32", "err": "31", "warn": "33", "info": "2"}
+    RANK = {"ok": 0, "info": 0, "warn": 1, "err": 2}
 
-    check("greetd installed", bool(shutil.which("greetd") or Path("/usr/bin/greetd").exists()), "install greetd")
-    check("Quickshell installed", bool(qs_bin()), "install quickshell")
-    check("a compositor (niri, Hyprland or sway)", any(shutil.which(c) for c in ("niri", "Hyprland", "sway")), "install niri")
-    qml = greeter_dir()
-    check(f"greeter UI at {qml}", (qml / "shell.qml").exists(), "reinstall flamenco-greeter")
-    shared = all((qml / d).exists() for d in ("Commons", "Widgets", "assets"))
-    check("Flamenco Shell components linked", shared, "install flamenco-shell (the greeter reuses its Commons/Widgets)")
+    def __init__(self):
+        self.sections: list[dict] = []
+
+    def section(self, title: str):
+        self.sections.append({"title": title, "items": []})
+
+    def add(self, level: str, text: str, hint: str = "", details: list[str] | None = None):
+        self.sections[-1]["items"].append({"level": level, "text": text, "hint": hint, "details": details or []})
+
+    def ok(self, text, hint=""): self.add("ok", text, hint)
+    def info(self, text, hint=""): self.add("info", text, hint)
+    def warn(self, text, hint="", details=None): self.add("warn", text, hint, details)
+    def err(self, text, hint="", details=None): self.add("err", text, hint, details)
+
+    def count(self, level: str) -> int:
+        return sum(1 for s in self.sections for i in s["items"] if i["level"] == level)
+
+    def print(self, color: bool):
+        def c(code, text):
+            return f"\033[{code}m{text}\033[0m" if color else text
+        for sec in self.sections:
+            worst = max((i["level"] for i in sec["items"]), key=lambda l: self.RANK[l], default="ok")
+            worst = "ok" if worst == "info" else worst
+            print(f"\n{c(self.COLORS[worst], '[' + self.MARKS[worst] + ']')} {c('1', sec['title'])}")
+            for i in sec["items"]:
+                print(f"    {c(self.COLORS[i['level']], self.MARKS[i['level']])} {i['text']}")
+                for d in i["details"]:
+                    print(f"        {c('2', d)}")
+                if i["hint"] and i["level"] in ("err", "warn"):
+                    print(f"      {c('36', '→')} {i['hint']}")
+
+
+def pkg_version(pkg: str) -> str:
+    if shutil.which("pacman"):
+        code, out, _ = run_out(["pacman", "-Q", pkg])
+        if code == 0 and out:
+            return out.split()[-1]
+    return ""
+
+
+def tool_version(cmd: list[str]) -> str:
+    code, out, err = run_out(cmd)
+    m = re.search(r"\d+\.\d+(\.\d+)?", out or err)
+    return m.group(0) if code == 0 and m else ""
+
+
+def parse_greetd_config(text: str) -> dict:
     try:
-        pwd.getpwnam(GREETER_USER)
-        has_user = True
-    except KeyError:
-        has_user = False
-    check(f"'{GREETER_USER}' user exists", has_user, "systemd-sysusers, or reinstall greetd")
-    check(f"{DEFAULT_CACHE} exists", DEFAULT_CACHE.is_dir(), "systemd-tmpfiles --create")
-    me = pwd.getpwuid(os.getuid()).pw_name
-    slot = DEFAULT_CACHE / "users" / me / "settings.json"
+        import tomllib
+        return tomllib.loads(text)
+    except ImportError:   # Python < 3.11: good enough for greetd's flat config
+        data, section = {}, {}
+        for line in text.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if m := re.match(r"\[(\w+)\]$", line):
+                section = data.setdefault(m.group(1), {})
+            elif "=" in line:
+                k, v = (x.strip() for x in line.split("=", 1))
+                section[k] = v.strip('"') if v.startswith('"') else int(v) if v.isdigit() else v
+        return data
+
+
+def launcher_options(command: str) -> dict:
+    """The flags a greetd `command = "flamenco-greeter …"` line passes."""
     try:
-        synced = slot.is_file()
-    except PermissionError:
-        synced = False
-    check(f"theme synced for {me}", synced, "flamenco-greeter sync")
+        argv = shlex.split(command)
+    except ValueError:
+        argv = command.split()
+    opts = {"argv": argv, "compositor": "", "config": "", "path": "", "cache": ""}
+    names = {"--command": "compositor", "-C": "config", "--config": "config",
+             "-p": "path", "--path": "path", "--cache-dir": "cache"}
+    for i, a in enumerate(argv):
+        if a in names and i + 1 < len(argv):
+            opts[names[a]] = argv[i + 1]
+    return opts
+
+
+def journal_lines(args: list[str]) -> list[str] | None:
+    """journalctl output, or None when we may not read the system journal."""
+    if not shutil.which("journalctl"):
+        return None
+    code, out, err = run_out(["journalctl", "--no-pager", "-o", "cat"] + args, timeout=15)
+    if "insufficient permissions" in err or "not seeing messages" in err or code not in (0, 1):
+        return None
+    return [l for l in strip_ansi(out).splitlines() if l.strip() and l.strip() != "-- No entries --"]
+
+
+def systemctl(*args: str) -> str:
+    return run_out(["systemctl", *args])[1] if shutil.which("systemctl") else ""
+
+
+def doctor_user() -> str:
+    """Who's asking: under sudo, the person who ran sudo."""
+    return os.environ.get("SUDO_USER") or pwd.getpwuid(os.getuid()).pw_name
+
+
+def can_read(path: Path) -> bool:
     try:
-        conf = GREETD_CONFIG.read_text()
-        check("greetd uses flamenco-greeter", "flamenco-greeter" in conf, "flamenco-greeter enable")
+        return os.access(path, os.R_OK) and (not path.is_dir() or os.access(path, os.X_OK))
     except OSError:
-        check("greetd uses flamenco-greeter", False, "flamenco-greeter enable")
+        return False
 
-    fp = fingerprint_state()
-    if fp["readers"]:
-        # optional, so it never fails the doctor
-        checks.append({"name": "fingerprint login" + (" enabled" if fp["pam"] else " available"),
-                       "ok": True, "hint": "" if fp["pam"] else "flamenco-greeter fingerprint enable"})
 
-    if "--json" in args:
-        print(json.dumps(checks, indent=2))
+def check_dependencies(r: Report, conf: dict):
+    r.section("Dependencies")
+    v = pkg_version("greetd")
+    if shutil.which("greetd") or Path("/usr/bin/greetd").exists():
+        r.ok("greetd" + (f" {v}" if v else ""))
     else:
-        for c in checks:
-            mark = "\033[32m✓\033[0m" if c["ok"] else "\033[31m✗\033[0m"
-            hint = c["hint"] if not c["ok"] else f"  ({c['hint']})" if c["hint"] else ""
-            print(f" {mark} {c['name']}" + (f"  →  {hint}" if not c["ok"] else hint))
-    return 0 if all(c["ok"] for c in checks) else 1
+        r.err("greetd is not installed", "sudo pacman -S greetd")
+    if shutil.which("agreety"):
+        r.ok("agreety (greetd's text login, the fallback when the greeter can't start)")
+    else:
+        r.warn("agreety not found: if the greeter breaks there's no text login to fall back to",
+               "it ships with greetd; reinstall greetd")
+
+    qs = qs_bin()
+    if qs:
+        r.ok(f"Quickshell {tool_version([qs, '--version']) or pkg_version('quickshell')}".rstrip())
+        roots = [Path(p) for p in os.environ.get("QML_IMPORT_PATH", "").split(":") if p]
+        roots += [Path(p) for p in ("/usr/lib/qt6/qml", "/usr/lib64/qt6/qml", "/usr/lib/x86_64-linux-gnu/qt6/qml",
+                                    "/usr/lib/aarch64-linux-gnu/qt6/qml", "/run/current-system/sw/lib/qt-6/qml")]
+        found = [p for p in roots if (p / "Quickshell" / "Services" / "Greetd").is_dir()]
+        if found:
+            r.ok("Quickshell has greetd support")
+        elif any((p / "Quickshell").is_dir() for p in roots):
+            r.err("this Quickshell build has no greetd support (Quickshell.Services.Greetd)",
+                  "install a Quickshell built with greetd support (Arch's quickshell package has it)")
+        else:
+            r.info("couldn't find Quickshell's QML modules to confirm greetd support")
+    else:
+        r.err("Quickshell (qs) is not installed", "sudo pacman -S quickshell")
+
+    comp = conf.get("compositor") or "niri"
+    binary = {"niri": "niri", "hyprland": "Hyprland", "sway": "sway"}.get(comp, comp)
+    if shutil.which(binary) or (comp == "hyprland" and shutil.which("start-hyprland")):
+        ver = tool_version([binary, "--version"]) or pkg_version(binary.lower())
+        r.ok(f"{binary} {ver} (the compositor the greeter runs in)".replace("  ", " "))
+    else:
+        r.err(f"{binary} is not installed, but greetd is set to start the greeter in it",
+              f"install {binary.lower()}, or change --command in {GREETD_CONFIG}")
+
+    r.ok(f"Python {sys.version.split()[0]}")
+    for tool, why in (("matugen", "colors from wallpaper"), ("upower", "battery on the login screen"),
+                      ("gdbus", "fingerprint reader detection"), ("niri", "checking the generated niri config")):
+        if tool == "niri" and comp == "niri":
+            continue
+        if not shutil.which(tool):
+            r.info(f"{tool} not installed (optional: {why})")
+
+
+def check_files(r: Report, qml: Path):
+    r.section("Greeter interface")
+    if not (qml / "shell.qml").exists():
+        r.err(f"no greeter UI at {qml}", "reinstall flamenco-greeter")
+        return
+    r.ok(f"UI at {qml}")
+    broken = []
+    for link in SHARED_LINKS:
+        p = qml / link
+        if not p.exists():
+            target = os.readlink(p) if p.is_symlink() else "missing"
+            broken.append(f"{link} → {target}")
+    shell_dir = (qml / "Commons").resolve().parent
+    if broken:
+        r.err("links to Flamenco Shell are broken", "install flamenco-shell (the greeter uses its theme code)", broken)
+    else:
+        # the package version only describes the packaged copy, not a checkout linked by `make dev`
+        v = pkg_version("flamenco-shell") if str(shell_dir).startswith("/usr/") else ""
+        r.ok(f"Flamenco Shell {v + ' ' if v else ''}at {shell_dir}")
+    ok, errors = qml_check(qml)
+    if ok:
+        r.ok("the interface loads (every QML file checked off-screen)")
+    else:
+        r.err("the interface fails to load, so the login screen would stay black",
+              "update flamenco-greeter and flamenco-shell together; the errors say which file broke",
+              errors)
+
+
+def check_greetd(r: Report) -> dict:
+    """Checks greetd's config and service; returns the launcher options it found."""
+    r.section("greetd")
+    opts: dict = {}
+    if not GREETD_CONFIG.exists():
+        r.err(f"{GREETD_CONFIG} is missing", "flamenco-greeter enable")
+    else:
+        try:
+            conf = parse_greetd_config(GREETD_CONFIG.read_text())
+        except Exception as e:   # tomllib.TOMLDecodeError and friends
+            r.err(f"{GREETD_CONFIG} doesn't parse: {e}", "fix the syntax, or rewrite it with `flamenco-greeter enable`")
+            conf = None
+        if conf is not None:
+            r.ok(f"{GREETD_CONFIG} parses")
+            ds = conf.get("default_session") or {}
+            command, user = str(ds.get("command", "")), str(ds.get("user", "greeter"))
+            if not command:
+                r.err("[default_session] has no command", "flamenco-greeter enable")
+            elif "flamenco-greeter" not in command:
+                r.warn(f"greetd runs `{command}`, not flamenco-greeter", "flamenco-greeter enable")
+            else:
+                opts = launcher_options(command)
+                exe = opts["argv"][0] if opts["argv"] else ""
+                if not (shutil.which(exe) or os.access(exe, os.X_OK)):
+                    r.err(f"the command `{exe}` doesn't exist", f"fix the path in {GREETD_CONFIG}")
+                if opts["compositor"] not in COMPOSITORS:
+                    r.err(f"--command is `{opts['compositor'] or 'missing'}`; it must be niri, hyprland or sway",
+                          f"fix the command in {GREETD_CONFIG}")
+                else:
+                    r.ok(f"runs flamenco-greeter in {opts['compositor']} as {user}")
+                for key, flag in (("config", "-C"), ("path", "-p"), ("cache", "--cache-dir")):
+                    if opts[key] and not Path(opts[key]).exists():
+                        r.err(f"{flag} {opts[key]} doesn't exist", f"fix or remove {flag} in {GREETD_CONFIG}")
+            try:
+                pwd.getpwnam(user)
+            except KeyError:
+                r.err(f"the user greetd runs the greeter as ({user}) doesn't exist", "sudo systemd-sysusers")
+            if "terminal" not in conf:
+                r.warn("no [terminal] section (greetd needs vt = …)", "add `[terminal]` with `vt = 1`")
+
+    if not shutil.which("systemctl"):
+        r.info("no systemctl here; skipping service checks")
+        return opts
+    enabled = systemctl("is-enabled", "greetd.service")
+    installed = enabled not in ("", "not-found")
+    if enabled == "enabled":
+        r.ok("greetd.service is enabled")
+    elif not installed:
+        r.err("greetd.service isn't installed", "sudo pacman -S greetd")
+    else:
+        r.err(f"greetd.service is {enabled}", "sudo systemctl enable -f greetd")
+    dm = systemctl("show", "-p", "Id", "--value", "display-manager.service")
+    if dm and dm not in ("greetd.service", "display-manager.service"):
+        r.err(f"the display manager is {dm}, not greetd",
+              f"sudo systemctl disable {dm.removesuffix('.service')} && sudo systemctl enable -f greetd")
+    for other in OTHER_DMS:
+        if f"{other}.service" != dm and systemctl("is-enabled", f"{other}.service") == "enabled":
+            r.err(f"{other}.service is enabled too; two login screens fight over the display",
+                  f"sudo systemctl disable {other}")
+    if not installed:
+        return opts
+    props = dict(l.split("=", 1) for l in systemctl("show", "greetd.service", "-p", "ActiveState",
+                                                     "-p", "SubState", "-p", "Result", "-p", "NRestarts").splitlines() if "=" in l)
+    state = props.get("ActiveState", "")
+    restarts = int(props.get("NRestarts", "0") or 0)
+    if state == "active":
+        r.ok("greetd is running" + (f" (restarted {restarts} times)" if restarts else ""))
+    elif state:
+        r.err(f"greetd is {state} ({props.get('SubState', '')}, result: {props.get('Result', '')})",
+              "see the greetd log below, then: sudo systemctl restart greetd")
+    lines = journal_lines(["-b", "-u", "greetd.service", "-p", "warning", "-n", "8"])
+    if lines is None:
+        r.info("greetd's log needs root: run `sudo flamenco-greeter doctor` to include it")
+    elif lines:
+        r.warn("greetd logged problems this boot", "", lines[-8:])
+    return opts
+
+
+def check_pam(r: Report, user: str):
+    r.section("Authentication (PAM)")
+    if not GREETD_PAM.exists():
+        r.err(f"{GREETD_PAM} is missing, so nobody can log in", "reinstall greetd")
+        return
+    r.ok(f"{GREETD_PAM}")
+    missing, seen = set(), set()
+
+    def walk(path: Path, depth=0):
+        if path in seen or depth > 5:
+            return
+        seen.add(path)
+        if not path.exists():
+            missing.add(f"included file {path.name}")
+            return
+        for raw in pam_lines(path):
+            line = raw.split("#", 1)[0].strip()
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0].startswith("@include") and len(parts) > 1:
+                walk(path.parent / parts[1], depth + 1)
+                continue
+            if len(parts) > 2 and parts[1] in ("include", "substack"):
+                walk(path.parent / parts[2], depth + 1)
+                continue
+            optional = parts[0].startswith("-")
+            for word in parts[2:] if len(parts) > 2 and not parts[1].startswith("[") else parts[1:]:
+                if word.endswith(".so") and not optional:
+                    if not (word.startswith("/") and Path(word).exists()) and not pam_module_path(Path(word).name):
+                        missing.add(word)
+                    break
+
+    walk(GREETD_PAM)
+    if missing:
+        r.err("PAM refers to modules that aren't installed, so logins fail", "install them, or remove those lines",
+              sorted(missing))
+    else:
+        r.ok("every PAM module it uses is installed")
+    fp = fingerprint_state()
+    if fp["pam"]:
+        if not fp["fprintd"]:
+            r.err("fingerprint login is configured, but fprintd isn't running", "sudo pacman -S fprintd")
+        elif not fp["readers"]:
+            r.warn("fingerprint login is configured, but no reader is found", "plug in or enable the reader")
+        else:
+            enrolled = fprint_enrolled(user)
+            r.ok("fingerprint login" + (f"; {user} has fingers enrolled" if enrolled else ""))
+            if enrolled is False:
+                r.info(f"{user} has no fingers enrolled (fprintd-enroll)")
+        if fp["outdated"]:
+            r.warn("fingerprint settings are from an older version (passwords wait longer during a scan)",
+                   "flamenco-greeter fingerprint enable")
+    elif fp["readers"]:
+        r.info("a fingerprint reader is available (flamenco-greeter fingerprint enable)")
+
+
+def check_data(r: Report, cache: Path, user: str):
+    r.section("Greeter user and data")
+    try:
+        g = pwd.getpwnam(GREETER_USER)
+        r.ok(f"user {GREETER_USER} (uid {g.pw_uid})")
+    except KeyError:
+        r.err(f"user {GREETER_USER} doesn't exist", "sudo systemd-sysusers")
+        g = None
+    if not cache.is_dir():
+        r.err(f"{cache} doesn't exist", "sudo systemd-tmpfiles --create")
+        return
+    st = cache.stat()
+    owner = pwd.getpwuid(st.st_uid).pw_name if st.st_uid in [p.pw_uid for p in pwd.getpwall()] else str(st.st_uid)
+    if g and st.st_uid != g.pw_uid:
+        r.err(f"{cache} belongs to {owner}, so the greeter can't write to it",
+              f"sudo chown -R {GREETER_USER}:{GREETER_USER} {cache}")
+    elif st.st_mode & 0o070 != 0o070:
+        r.warn(f"{cache} isn't group-writable (mode {oct(st.st_mode & 0o7777)})", f"sudo chmod 2770 {cache}")
+    else:
+        r.ok(f"{cache} (owned by {owner}, mode {oct(st.st_mode & 0o7777)})")
+    if not can_read(cache):
+        r.info(f"can't look inside {cache}: join the {GREETER_USER} group, or run with sudo")
+        return
+    users = cache / "users"
+    synced = sorted(p.parent.name for p in users.glob("*/settings.json")) if can_read(users) else []
+    mine = users / user / "settings.json"
+    if user in synced:
+        age = time.time() - mine.stat().st_mtime
+        try:
+            home = Path(pwd.getpwnam(user).pw_dir)
+            newer = (home / ".config/flamenco/settings.json").stat().st_mtime > mine.stat().st_mtime
+        except (KeyError, OSError):
+            newer = False
+        when = f"{int(age // 86400)} days ago" if age > 86400 else f"{int(age // 3600)} h ago" if age > 3600 else "recently"
+        if newer:
+            r.warn(f"{user}'s theme changed since the last sync ({when})", "flamenco-greeter sync")
+        else:
+            r.ok(f"{user}'s theme is synced ({when})")
+    else:
+        r.warn(f"{user}'s theme isn't synced, so the login screen uses the default look", "flamenco-greeter sync")
+    others = [u for u in synced if u != user]
+    if others:
+        r.info("also synced: " + ", ".join(others))
+    widgets = read_json(cache / "state" / "widgets.json")
+    n = len(widgets.get("widgets", []))
+    r.info(f"{n} widget{'s' if n != 1 else ''} on the login screen" + (", editing locked" if widgets.get("locked") else ""))
+
+
+def check_compositor(r: Report, opts: dict, cache: Path, qml: Path):
+    r.section("Compositor and display")
+    comp = opts.get("compositor") or "niri"
+    settings = read_json(cache / "config" / "flamenco" / "settings.json") if can_read(cache) else {}
+    kb = settings.get("keyboard") or {}
+    base = ""
+    if opts.get("config"):
+        try:
+            base = Path(opts["config"]).read_text()
+        except OSError:
+            pass
+    if comp == "niri" and shutil.which("niri"):
+        with tempfile.TemporaryDirectory(prefix="flamenco-greeter-doctor-") as tmp:
+            cfg = Path(tmp) / "niri.kdl"
+            cfg.write_text(niri_config(base, f"sh {tmp}/run-greeter.sh", kb, None))
+            problem = niri_invalid(cfg)
+        if problem:
+            r.err("the niri config the launcher writes is invalid", "check -C and /etc/greetd/flamenco-niri.kdl", [problem])
+        else:
+            r.ok("the niri config the launcher writes is valid")
+        for o in NIRI_OVERRIDES:
+            if Path(o).exists():
+                r.info(f"includes {o}")
+    elif comp == "sway" and shutil.which("sway"):
+        with tempfile.TemporaryDirectory(prefix="flamenco-greeter-doctor-") as tmp:
+            cfg = Path(tmp) / "sway.conf"
+            cfg.write_text(sway_config(base, "true", kb))
+            code, out, err = run_out(["sway", "-C", "-c", str(cfg)])
+        if code == 0:
+            r.ok("the sway config the launcher writes is valid")
+        else:
+            r.err("the sway config the launcher writes is invalid", "check -C", (out + "\n" + err).strip().splitlines()[-3:])
+    else:
+        r.info(f"{comp}: config not checked")
+    if shutil.which("loginctl"):
+        graphical = run_out(["loginctl", "show-seat", "seat0", "-p", "CanGraphical", "--value"])[1]
+        if graphical == "yes":
+            r.ok("seat0 has a display")
+        elif graphical:
+            r.err("seat0 has no usable display (GPU driver not loaded?)", "check `ls /dev/dri` and your GPU driver")
+    if not list(Path("/dev/dri").glob("card*")):
+        r.err("no GPU device in /dev/dri", "check your GPU driver (e.g. nvidia-drm.modeset=1 for NVIDIA)")
+
+
+def check_sessions(r: Report, cache: Path):
+    r.section("Desktop sessions")
+    sessions = list_sessions()
+    if not sessions:
+        r.err("no desktop sessions are installed, so there's nothing to log in to",
+              "install one (niri ships niri.desktop in /usr/share/wayland-sessions)")
+        return
+    r.ok(f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}: " + ", ".join(s["name"] for s in sessions))
+    for s in sessions:
+        exe = s["command"][0]
+        if s["type"] == "x11":
+            exe = s["command"][2] if len(s["command"]) > 2 else exe
+        if not (shutil.which(exe) or os.access(exe, os.X_OK)):
+            r.warn(f"{s['name']} starts `{exe}`, which isn't installed", "remove the session or install it")
+
+
+def check_history(r: Report, opts: dict, cache: Path):
+    r.section("Recent trouble")
+    clean = True
+    if not (cache / "state").exists():
+        pass   # never started yet
+    elif can_read(cache / "state"):
+        crashes = crash_times(cache)
+        recent = [t for t in crashes if time.time() - t < 3600]
+        if recent:
+            clean = False
+            r.err(f"the login screen crashed {len(recent)} time{'s' if len(recent) != 1 else ''} in the last hour",
+                  "the interface check above usually says why")
+        try:
+            last = (cache / "state" / "fallback").read_text().strip().splitlines()[-1]
+            ts, why = last.split(" ", 1)
+            if time.time() - int(ts) < 86400 * 2:
+                clean = False
+                r.warn(f"fell back to a text login {time.strftime('%a %H:%M', time.localtime(int(ts)))}: {why}",
+                       "fix what's reported above, then: sudo systemctl restart greetd")
+        except (OSError, ValueError, IndexError):
+            pass
+    else:
+        r.info("can't read the crash history (run with sudo)")
+    comp = opts.get("compositor") or "niri"
+    lines = journal_lines(["-b", "-t", f"flamenco-greeter/{comp}", "-n", "400"])
+    if lines is None:
+        r.info("the greeter's log needs root: run `sudo flamenco-greeter doctor` to include it")
+    else:
+        noise = ("MESA", "color scheme", "settings.json", "dropped operation", "window masks")
+        bad = [l for l in lines if re.search(r"ERROR|caused by|panic|error:|Failed", l) and not any(n in l for n in noise)]
+        if bad:
+            clean = False
+            r.warn("the greeter logged errors this boot", f"full log: journalctl -b -t flamenco-greeter/{comp}", bad[-8:])
+    if clean:
+        r.ok("no crashes or fallbacks recorded")
+
+
+def cmd_doctor(args: list[str]) -> int:
+    report = Report()
+    user = doctor_user()
+    opts = {}
+    sections = [
+        ("greetd", lambda: opts.update(check_greetd(report))),
+        ("dependencies", lambda: check_dependencies(report, opts)),
+        ("files", lambda: check_files(report, Path(opts["path"]) if opts.get("path") else greeter_dir())),
+        ("pam", lambda: check_pam(report, user)),
+        ("data", lambda: check_data(report, Path(opts.get("cache") or DEFAULT_CACHE), user)),
+        ("compositor", lambda: check_compositor(report, opts, Path(opts.get("cache") or DEFAULT_CACHE),
+                                                Path(opts["path"]) if opts.get("path") else greeter_dir())),
+        ("sessions", lambda: check_sessions(report, Path(opts.get("cache") or DEFAULT_CACHE))),
+        ("history", lambda: check_history(report, opts, Path(opts.get("cache") or DEFAULT_CACHE))),
+    ]
+    for name, fn in sections:
+        try:
+            fn()
+        except Exception as e:   # one broken check shouldn't hide the rest
+            if not report.sections:
+                report.section(name)
+            report.err(f"couldn't check {name}: {e}")
+    # greetd is checked first to learn the launcher options, but dependencies read better at the top
+    if len(report.sections) > 1 and report.sections[1]["title"] == "Dependencies":
+        report.sections.insert(0, report.sections.pop(1))
+
+    errors, warnings = report.count("err"), report.count("warn")
+    if "--json" in args:
+        print(json.dumps({"version": VERSION, "errors": errors, "warnings": warnings, "sections": report.sections}, indent=2))
+        return 1 if errors else 0
+    color = sys.stdout.isatty()
+    print(f"Flamenco Greeter {VERSION} · doctor" + (" (as root)" if os.geteuid() == 0 else ""))
+    report.print(color)
+    print()
+    if errors:
+        print(f"{errors} problem{'s' if errors != 1 else ''}, {warnings} warning{'s' if warnings != 1 else ''}. "
+              "Fix the ✗ items above, then restart the login screen: sudo systemctl restart greetd")
+    elif warnings:
+        print(f"No problems, {warnings} warning{'s' if warnings != 1 else ''}.")
+    else:
+        print("Everything looks right.")
+    return 1 if errors else 0
 
 
 def main() -> int:
@@ -914,8 +1629,10 @@ def main() -> int:
         return cmd_enable(rest)
     if cmd == "preview":
         return cmd_preview(rest)
-    if cmd == "doctor":
+    if cmd in ("doctor", "check"):
         return cmd_doctor(rest)
+    if cmd == "widgets":
+        return cmd_widgets(rest)
     if cmd.startswith("-"):
         return cmd_launch(args)
     print(__doc__)

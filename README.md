@@ -7,7 +7,7 @@
 </picture>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.1-E8466F?style=for-the-badge" alt="Version 0.2.1">
+  <img src="https://img.shields.io/badge/version-0.3.0-E8466F?style=for-the-badge" alt="Version 0.3.0">
   <img src="https://img.shields.io/badge/greetd-greeter-FFB867?style=for-the-badge" alt="greetd greeter">
   <img src="https://img.shields.io/badge/Quickshell-0.3.2-FF5722?style=for-the-badge&logo=qt&logoColor=white" alt="Quickshell 0.3.2">
   <img src="https://img.shields.io/badge/Material%20Design-3-6750A4?style=for-the-badge&logo=materialdesign&logoColor=white" alt="Material Design 3">
@@ -19,7 +19,9 @@
   <a href="#features"><b>✨ Features</b></a> &nbsp;·&nbsp;
   <a href="#install"><b>🚀 Install</b></a> &nbsp;·&nbsp;
   <a href="#configure"><b>⚙️ Configure</b></a> &nbsp;·&nbsp;
+  <a href="#widgets"><b>🧩 Widgets</b></a> &nbsp;·&nbsp;
   <a href="#fingerprint"><b>👆 Fingerprint</b></a> &nbsp;·&nbsp;
+  <a href="#doctor"><b>🩺 Doctor</b></a> &nbsp;·&nbsp;
   <a href="#troubleshooting"><b>🛟 Help</b></a> &nbsp;·&nbsp;
   <a href="#reference"><b>📚 Reference</b></a>
 </p>
@@ -59,6 +61,20 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
       Only what the login screen needs leaves your home directory, into a folder only the greeter can read.
     </td>
   </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>🧩 Widgets</h3>
+      Press and hold the background to add a clock, calendar, weather, battery, system info or a note, and drag them anywhere.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🩺 Never a black screen</h3>
+      If the login screen can't start, you get a text login with the reason instead of a black screen that keeps retrying.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🔎 A real doctor</h3>
+      <code>flamenco-greeter doctor</code> checks packages, greetd, PAM, the UI itself and the logs, and says what to run next.
+    </td>
+  </tr>
 </table>
 
 <details>
@@ -68,7 +84,9 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
 - [✨ Features](#features)
 - [🚀 Install](#install): prebuilt package, build the package, from source
 - [⚙️ Configure](#configure): turn it on, sync your theme, what carries over, compositor & monitors, launcher options
+- [🧩 Widgets](#widgets)
 - [👆 Fingerprint login](#fingerprint)
+- [🩺 When the login screen won't start](#doctor): the doctor, the text-login fallback
 - [🛟 Troubleshooting](#troubleshooting)
 - [📚 Reference](#reference): commands, files, how a login works
 - [🛠️ Development](#development)
@@ -91,6 +109,15 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
   <tr>
     <td align="center"><img src="docs/screenshots/wrong-password.png" alt="Wrong password"><br><b>🔑 Wrong password</b></td>
     <td align="center"><img src="docs/screenshots/login-light.png" alt="Light mode"><br><b>☀️ Light mode</b></td>
+  </tr>
+</table>
+
+### 🧩 Widgets
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="docs/screenshots/widgets.png" alt="Widgets on the login screen"><br><b>Clock, calendar, a note and system info</b></td>
+    <td width="50%" align="center"><img src="docs/screenshots/widgets-edit.png" alt="Editing widgets"><br><b>Press and hold to edit</b></td>
   </tr>
 </table>
 
@@ -139,6 +166,8 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
 | 🧠 **Remembers you** | The last user and session are preselected next time. Turn this off with `--no-save-username` / `--no-save-session`. |
 | ⌨️ **Your keyboard & cursor** | Layout, variant, options, repeat rate, numlock and cursor theme are applied to the greeter's compositor, so your password types the same as on the desktop. |
 | 👆 **Fingerprint** | With fprintd: the reader listens as soon as a user is picked, "Scan your finger on the reader" appears, and a typed password goes in as soon as the current scan ends. |
+| 🧩 **Widgets** | Press and hold the background to add a clock, calendar, weather, battery, system info or notes, then drag them into place. |
+| 🩺 **Self-checks** | The UI is test-loaded before every start after an update; if it's broken, or keeps crashing, you get a text login with the reason. `flamenco-greeter doctor` explains the rest. |
 | 🔐 **Extra PAM prompts** | One-time codes, token PINs and lockout notices show up in the password field. |
 | 🪟 **niri, Hyprland or sway** | The compositor config is generated at every start. Your own monitor layout can be included. |
 | 🖥️ **Multi-monitor** | Every screen gets the wallpaper and clock. The first screen gets the login card. |
@@ -157,7 +186,7 @@ Every release is kept under [`History Builds/`](History%20Builds), one folder pe
 
 ```sh
 sudo pacman -S --needed greetd quickshell niri   # if not installed yet
-sudo pacman -U "History Builds/flamenco-greeter-0.2.1-1/flamenco-greeter-0.2.1-1-any.pkg.tar.zst"
+sudo pacman -U "History Builds/flamenco-greeter-0.3.0-1/flamenco-greeter-0.3.0-1-any.pkg.tar.zst"
 ```
 
 Pacman's systemd hooks create the `greeter` user and the `/var/cache/flamenco-greeter` data folder automatically.
@@ -241,19 +270,7 @@ From then on, every change you make in Flamenco Settings reaches the login scree
 flamenco-greeter doctor
 ```
 
-```text
- ✓ greetd installed
- ✓ Quickshell installed
- ✓ a compositor (niri, Hyprland or sway)
- ✓ greeter UI at /usr/share/flamenco-greeter/greeter
- ✓ Flamenco Shell components linked
- ✓ 'greeter' user exists
- ✓ /var/cache/flamenco-greeter exists
- ✓ theme synced for alice
- ✓ greetd uses flamenco-greeter
-```
-
-Reboot (or `sudo systemctl restart greetd` from a TTY) and you're done.
+It should end with *Everything looks right*. Then reboot (or `sudo systemctl restart greetd` from a TTY) and you're done. See [the doctor](#doctor) for what it checks.
 
 ### 🎨 What carries over from Flamenco Settings
 
@@ -303,6 +320,31 @@ Add these after `--command` in greetd's `command = "…"` line:
 
 <p align="right"><a href="#top">⬆️ Back to top</a></p>
 
+<a id="widgets"></a>
+
+## 🧩 Widgets
+
+**Press and hold** anywhere on the login screen's background (or on a widget) for a moment. A ring grows under the pointer, then the screen switches to editing:
+
+- **Add** a widget from the sheet at the bottom: **Clock** (analog), **Calendar**, **Weather**, **Battery**, **System** (host, OS, kernel, uptime) or **Note**.
+- **Move** a widget by dragging it; **remove** it with its ✕.
+- **Set up** the Weather widget by typing a city right on it (°C/°F with the thermometer button), and write a Note in place.
+- **Finish** with *Done*, <kbd>Esc</kbd>, or a click on an empty spot.
+
+Widgets belong to the login screen, not to a user: everyone who logs in on this computer sees the same layout, saved in `/var/cache/flamenco-greeter/state/widgets.json`. Positions are kept as fractions of the screen, so a layout survives a resolution change.
+
+```sh
+flamenco-greeter widgets list      # what's on the login screen
+flamenco-greeter widgets lock      # stop anyone editing them (holding the background does nothing)
+flamenco-greeter widgets unlock
+flamenco-greeter widgets reset     # remove them all
+```
+
+> [!TIP]
+> Try layouts from your desktop with `flamenco-greeter preview`: it starts from the login screen's current widgets (or `--widgets FILE`), and nothing you change there touches the real login screen.
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
 <a id="fingerprint"></a>
 
 ## 👆 Fingerprint login
@@ -328,21 +370,110 @@ flamenco-greeter fingerprint status    # reader, PAM and enrolled fingers at a g
 
 <p align="right"><a href="#top">⬆️ Back to top</a></p>
 
+<a id="doctor"></a>
+
+## 🩺 When the login screen won't start
+
+### Text login instead of a black screen
+
+The most common breakage is an update: Flamenco Shell changes in a way this greeter version doesn't expect, the interface fails to load, Quickshell exits, and greetd starts it again and again on a black screen. The launcher guards against that:
+
+- After any update (to the greeter, Flamenco Shell or Quickshell), it **test-loads the interface off-screen** before starting the compositor. That takes about a second, once.
+- It **counts crashes**: three within five minutes and it stops retrying.
+- It **validates the niri config**, and retries once without `-C` and `/etc/greetd/flamenco-niri.kdl` if one of those has a mistake.
+
+When any of these fail, you get greetd's text login (`agreety`) with the reason at the top, so you can still log in, and the next start tries the real login screen again:
+
+```text
+  Flamenco Greeter couldn't start: its interface doesn't load: caused by
+  @Modules/Greeter/GreeterMenu.qml[57:25]: Cannot assign to non-existent property "source"
+
+  Log in below. Afterwards, run `flamenco-greeter doctor` to see what's wrong.
+```
+
+### The doctor
+
+```sh
+sudo flamenco-greeter doctor      # works from a TTY; with sudo it also reads the logs
+flamenco-greeter check            # the same thing
+flamenco-greeter doctor --json    # for scripts
+```
+
+It checks everything the login screen depends on, groups the results, and puts the next step under anything that's wrong (✓ fine · ✗ problem · ! warning · · note):
+
+| Section | What it looks at |
+|---|---|
+| **Dependencies** | greetd and its text login (`agreety`), Quickshell and its greetd support, the configured compositor, Python, optional tools |
+| **greetd** | `/etc/greetd/config.toml` parses and runs flamenco-greeter correctly (`--command`, `-C`, `-p`, the user); `greetd.service` enabled and running; other display managers (SDDM, GDM, …) that are still enabled; greetd's own log |
+| **Greeter interface** | the UI files, the links into Flamenco Shell, and a real off-screen load of every QML file, with the exact file and line when one breaks |
+| **Authentication (PAM)** | `/etc/pam.d/greetd` and every PAM module it uses (following includes), fingerprint setup |
+| **Greeter user and data** | the `greeter` user, the data folder's owner and permissions, whether your theme is synced and up to date, widgets |
+| **Compositor and display** | the niri (or sway) config the launcher would write, checked with `niri validate`; whether the seat has a usable GPU |
+| **Desktop sessions** | installed sessions and whether their programs exist |
+| **Recent trouble** | crashes, text-login fallbacks, and errors from the greeter's log this boot |
+
+An example from a machine where an update broke the interface and an old display manager was left enabled:
+
+```text
+Flamenco Greeter 0.3.0 · doctor (as root)
+
+[✓] Dependencies
+    ✓ greetd 0.10.3
+    ✓ agreety (greetd's text login, the fallback when the greeter can't start)
+    ✓ Quickshell 0.3.2
+    ✓ Quickshell has greetd support
+    ✓ niri 26.04 (the compositor the greeter runs in)
+
+[✗] greetd
+    ✓ /etc/greetd/config.toml parses
+    ✓ runs flamenco-greeter in niri as greeter
+    ✓ greetd.service is enabled
+    ✗ sddm.service is enabled too; two login screens fight over the display
+      → sudo systemctl disable sddm
+    ✓ greetd is running (restarted 14 times)
+
+[✗] Greeter interface
+    ✓ UI at /usr/share/flamenco-greeter/greeter
+    ✓ Flamenco Shell 0.45.0-1 at /usr/share/flamenco-shell/shell
+    ✗ the interface fails to load, so the login screen would stay black
+        caused by @Modules/Greeter/GreeterMenu.qml[57:25]: Cannot assign to non-existent property "source"
+      → update flamenco-greeter and flamenco-shell together; the errors say which file broke
+
+[✗] Recent trouble
+    ✗ the login screen crashed 3 times in the last hour
+    ! fell back to a text login Sun 09:12: its interface doesn't load: …
+
+3 problems, 1 warning. Fix the ✗ items above, then restart the login screen: sudo systemctl restart greetd
+```
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
 <a id="troubleshooting"></a>
 
 ## 🛟 Troubleshooting
 
 <details>
-<summary><b>Black screen, or the greeter doesn't appear</b></summary>
+<summary><b>Black screen, a text login, or the greeter keeps restarting</b></summary>
 
-Switch to another TTY with <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F2</kbd>, log in, and read the logs:
+If you got the text login, log in there. Otherwise switch to another TTY with <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F2</kbd> and log in. Then:
 
 ```sh
-journalctl -b -t flamenco-greeter/niri      # or flamenco-greeter/hyprland, /sway
-flamenco-greeter doctor
+sudo flamenco-greeter doctor
 ```
 
-To go back to your previous display manager in the meantime: `sudo systemctl enable -f sddm` (or `gdm`, …) and reboot.
+It names the broken piece and the command to fix it. The full greeter log is in `journalctl -b -t flamenco-greeter/niri` (or `/hyprland`, `/sway`). To go back to your previous display manager in the meantime: `sudo systemctl enable -f sddm` (or `gdm`, …) and reboot.
+</details>
+
+<details>
+<summary><b>The login screen broke after updating Flamenco Shell</b></summary>
+
+The greeter uses the shell's theme code directly, so the two should be updated together. Update flamenco-greeter, then check with `sudo flamenco-greeter doctor` (the *Greeter interface* section loads the UI and shows any error). Until then, the launcher gives you a text login instead of a black screen.
+</details>
+
+<details>
+<summary><b>Holding the background doesn't edit widgets</b></summary>
+
+Editing may be locked: `flamenco-greeter widgets unlock`. Holding only works on empty background or on a widget, not on the login card.
 </details>
 
 <details>
@@ -388,8 +519,9 @@ The first screen the compositor reports gets it. Turn off the outputs you don't 
 | `flamenco-greeter enable [niri\|hyprland\|sway]` | Point greetd at the greeter and make it the display manager |
 | `flamenco-greeter sync [--quiet] [--no-sudo]` | Copy your theme, wallpaper and avatar to the login screen |
 | `flamenco-greeter fingerprint status\|enable\|disable` | Manage fingerprint login |
-| `flamenco-greeter preview [--fingerprint] [--palette P] [--mode M] [--wallpaper W]` | Try the greeter in a window (`--fingerprint` adds a pretend reader) |
-| `flamenco-greeter doctor [--json]` | Check the setup |
+| `flamenco-greeter widgets list\|lock\|unlock\|reset` | Manage the login screen's widgets |
+| `flamenco-greeter preview [--fingerprint] [--palette P] [--mode M] [--wallpaper W] [--widgets FILE]` | Try the greeter in a window (`--fingerprint` adds a pretend reader) |
+| `flamenco-greeter doctor [--json]` (or `check`) | Check everything the login screen needs |
 | `flamenco-greeter --command niri …` | Start the greeter (what greetd runs) |
 
 ### How a login works
@@ -416,6 +548,9 @@ The first screen the compositor reports gets it. Turn off the outputs you don't 
   users/<name>/settings.json            your synced settings (written by `sync`)
   users/<name>/wallpaper.*, face        your wallpaper and avatar
   state/memory.json                     last user + session
+  state/widgets.json                    the login screen's widgets
+  state/failures, state/fallback        crash and text-login history (read by `doctor`)
+  state/run-greeter.sh                  what the compositor runs: the UI, noting crashes
 ```
 
 <p align="right"><a href="#top">⬆️ Back to top</a></p>
@@ -436,20 +571,25 @@ qs -p greeter ipc call greeter menu users      # or: sessions, ""
 qs -p greeter ipc call greeter type hunter2
 qs -p greeter ipc call greeter submit
 qs -p greeter ipc call greeter finger true     # with --fingerprint: a matching (true) or wrong (false) finger
+qs -p greeter ipc call greeter edit true       # widget editing on/off
+qs -p greeter ipc call greeter addWidget clock
+qs -p greeter ipc call greeter grab /tmp/shot.png   # save the screen as a PNG
 ```
+
+`FLAMENCO_GREETER_WINDOWED=1` runs the real greeter (real greetd conversation, no fake login) in a window, which is how `tools/test-login.sh` drives it.
 
 | Tool | |
 |---|---|
 | `tools/test-login.sh` | Run log-in scenarios (password, fingerprint, both at once) against `tools/mock-greetd.py` |
-| `tools/screenshots.sh` | Capture the README screenshots (KDE Spectacle or niri) |
+| `tools/screenshots.sh` | Capture the README screenshots (any desktop; the greeter saves its own window) |
 | `tools/readme-assets.py` | Redraw the banners and diagram from the shell's palettes |
 | `packaging/arch/build-local.sh` | Build the Arch package into `History Builds/` |
 
 ```text
 bin/flamenco-greeter        launcher, sync, enable, fingerprint, preview, doctor, and the probes the UI uses
 greeter/shell.qml           entry: a layer-shell surface per screen, or a window in preview
-greeter/Modules/Greeter/    the login screen, user/session menus, avatar
-greeter/Services/           greetd conversation + state, memory, power
+greeter/Modules/Greeter/    the login screen, user/session menus, avatar, Login*Widget.qml widgets
+greeter/Services/           greetd conversation + state, memory, power, widget layouts
 data/                       sysusers, tmpfiles, sync units
 ```
 

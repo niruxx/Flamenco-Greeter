@@ -4,7 +4,7 @@ post_install() {
     echo ">>   flamenco-greeter sync     bring your theme, wallpaper and avatar to the login screen"
     echo ">>   flamenco-greeter preview  try it in a window first"
     echo ">>   flamenco-greeter fingerprint enable   log in with a fingerprint (needs fprintd)"
-    echo ">>   flamenco-greeter doctor   check the setup"
+    echo ">>   flamenco-greeter doctor   check everything the login screen needs (run it from a TTY if the screen stays black)"
 }
 
 post_upgrade() {
@@ -13,4 +13,5 @@ post_upgrade() {
         flamenco-greeter fingerprint enable
     fi
     echo ">> Flamenco Greeter upgraded. The new version shows at the next login screen."
+    echo ">> New: press and hold the login screen's background to add widgets; \`flamenco-greeter doctor\` checks the whole setup."
 }

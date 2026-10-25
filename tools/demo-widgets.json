@@ -1,0 +1,9 @@
+{
+  "locked": false,
+  "widgets": [
+    {"id": "clock", "type": "clock", "x": 0.13, "y": 0.3, "config": {}},
+    {"id": "calendar", "type": "calendar", "x": 0.87, "y": 0.32, "config": {}},
+    {"id": "system", "type": "system", "x": 0.86, "y": 0.74, "config": {}},
+    {"id": "note", "type": "note", "x": 0.14, "y": 0.74, "config": {"text": "Welcome! Guests can log in as 'guest'."}}
+  ]
+}

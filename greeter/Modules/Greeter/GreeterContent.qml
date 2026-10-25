@@ -37,6 +37,30 @@ Item {
 
     property string menu: ""   // "" | "users" | "sessions"
 
+    // ── widget editing: press and hold the background (or a widget) ──
+    property bool editing: false
+    // the clock, login card and buttons step back while widgets are edited
+    readonly property real chrome: editing ? 0.15 : 1
+    property real chromeAnim: chrome
+    Behavior on chromeAnim { Anim {} }
+
+    function startEditing() {
+        if (!primary || GreeterWidgets.locked || Greeter.unlocking)
+            return;
+        menu = "";
+        editing = true;
+        root.forceActiveFocus();
+    }
+
+    function stopEditing() {
+        if (!editing)
+            return;
+        editing = false;
+        input.forceActiveFocus();
+    }
+
+    Keys.onEscapePressed: stopEditing()
+
     // ── wallpaper (cross-fades when a different user's theme comes in) ──
     readonly property string wallpaper: Paths.expand(Settings.data.wallpaper.current)
     property bool showB: false
@@ -95,18 +119,66 @@ Item {
         opacity: 0.25
     }
 
-    // click outside a menu to close it
+    // the background: a click closes a menu or finishes editing; holding it starts editing
     MouseArea {
+        id: background
         anchors.fill: parent
-        enabled: root.menu !== ""
-        onClicked: root.menu = ""
+        enabled: root.primary
+        pressAndHoldInterval: 600
+        onPressed: mouse => {
+            if (root.editing || root.menu !== "" || GreeterWidgets.locked)
+                return;
+            holdRing.x = mouse.x - holdRing.width / 2;
+            holdRing.y = mouse.y - holdRing.height / 2;
+            holdGrow.restart();
+        }
+        onReleased: holdGrow.stop()
+        onCanceled: holdGrow.stop()
+        onPressAndHold: root.startEditing()
+        onClicked: {
+            if (root.menu !== "")
+                root.menu = "";
+            else if (root.editing)
+                root.stopEditing();
+        }
+    }
+
+    // grows under the pointer while holding, so it's clear something is about to happen
+    Rectangle {
+        id: holdRing
+        width: 72
+        height: 72
+        radius: 36
+        color: Theme.alpha(Theme.accent, 0.22)
+        border.width: 2
+        border.color: Theme.accent
+        opacity: holdGrow.running ? 1 : 0
+        scale: 0
+        Behavior on opacity { Anim { duration: Theme.durShort } }
+        NumberAnimation {
+            id: holdGrow
+            target: holdRing
+            property: "scale"
+            from: 0.2
+            to: 1
+            duration: background.pressAndHoldInterval
+            easing.type: Easing.OutCubic
+        }
+    }
+
+    LoginWidgetLayer {
+        anchors.fill: parent
+        visible: root.primary
+        opacity: root.p
+        editing: root.editing
+        onHoldToEdit: root.startEditing()
     }
 
     // ── clock ──
     ColumnLayout {
         anchors.horizontalCenter: parent.horizontalCenter
         y: parent.height * 0.16 - (1 - root.p) * 80
-        opacity: root.p
+        opacity: root.p * root.chromeAnim
         spacing: 0
 
         FText {
@@ -131,11 +203,12 @@ Item {
         visible: root.primary
         anchors.horizontalCenter: parent.horizontalCenter
         y: parent.height * 0.58 + (1 - root.p) * 120 - (Greeter.manualUser ? 34 : 0)
-        opacity: root.p
+        opacity: root.p * root.chromeAnim
+        enabled: !root.editing
         spacing: Theme.sp4
         Behavior on y { enabled: root.p === 1; Anim { easing.bezierCurve: Theme.curves.spring } }
 
-        Avatar {
+        GreeterAvatar {
             id: face
             Layout.alignment: Qt.AlignHCenter
             size: 96
@@ -365,7 +438,7 @@ Item {
         }
     }
 
-    PickerMenu {
+    GreeterMenu {
         visible: root.primary && opacity > 0
         open: root.menu === "users"
         avatars: true
@@ -397,8 +470,10 @@ Item {
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottomMargin: 40 - (1 - root.p) * 100
-        opacity: root.p
+        opacity: root.p * (root.editing ? 0 : 1)
+        enabled: !root.editing
         spacing: Theme.sp3
+        Behavior on opacity { Anim { duration: Theme.durShort } }
 
         Rectangle {
             id: sessionChip
@@ -434,7 +509,7 @@ Item {
         FIconButton { icon: "power_settings_new"; size: 52; flat: false; iconColor: Theme.error; onClicked: GreeterPower.shutdown() }
     }
 
-    PickerMenu {
+    GreeterMenu {
         visible: root.primary && opacity > 0
         open: root.menu === "sessions"
         x: Math.max(Theme.sp4, bottom.x + sessionChip.x + sessionChip.width / 2 - width / 2)
@@ -476,7 +551,16 @@ Item {
         FText { text: GreeterPower.percent + "%" }
     }
 
-    // preview only: `qs -p … ipc call greeter …` for screenshots and testing
+    LoginWidgetSheet {
+        visible: root.primary && opacity > 0
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 32
+        open: root.editing
+        onDone: root.stopEditing()
+    }
+
+    // windowed only: `qs -p … ipc call greeter …` for screenshots and testing
     IpcHandler {
         target: "greeter"
         enabled: Greeter.windowed && root.primary
@@ -486,6 +570,10 @@ Item {
         function reset(): void { Greeter.reset(); }
         // with `preview --fingerprint`: touch the fake reader
         function finger(match: bool): void { Greeter.previewFinger(match); }
+        function edit(on: bool): void { on ? root.startEditing() : root.stopEditing(); }
+        function addWidget(type: string): void { GreeterWidgets.add(type); }
+        // save what's on screen to a PNG; works off-screen too (tools/screenshots.sh)
+        function grab(path: string): void { root.grabToImage(r => r.saveToFile(path)); }
     }
 
     // fade from / to black around the login

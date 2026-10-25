@@ -3,33 +3,23 @@
 #
 #   tools/screenshots.sh [output-dir]      (default: docs/screenshots)
 #
-# Run from a desktop session after `make dev`. Uses spectacle (KDE) or niri's
-# own window screenshot; rsvg-convert renders the palette wallpapers that
-# tools/readme-assets.py draws, so your own wallpaper never ends up in a shot.
-# Your settings aren't touched: preview works on a throwaway copy.
+# Run from any desktop session after `make dev`. The greeter saves its own
+# window through IPC (`ipc call greeter grab`), so no screenshot tool is needed and any
+# compositor works. rsvg-convert renders the palette wallpapers drawn by
+# tools/readme-assets.py, so your own wallpaper never ends up in a shot, and
+# preview works on a throwaway copy of your settings.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$here/..
-out=${1:-$root/docs/screenshots}
+out=$(realpath -m "${1:-$root/docs/screenshots}")
 settle=${SETTLE:-1.4}    # seconds for animations to finish before a capture
-boot=${BOOT:-4}          # seconds for a preview window to appear
+boot=${BOOT:-6}          # seconds for a preview window to appear
 work=${XDG_CACHE_HOME:-$HOME/.cache}/flamenco-greeter-readme
-greeter=$root/greeter
 bin=$root/bin/flamenco-greeter
 
 command -v rsvg-convert >/dev/null || { echo "screenshots: rsvg-convert is not installed (pacman -S librsvg)" >&2; exit 1; }
-[ -e "$greeter/Commons" ] || { echo "screenshots: run 'make dev' first" >&2; exit 1; }
-if command -v spectacle >/dev/null && [ "${XDG_CURRENT_DESKTOP:-}" = KDE ]; then
-    grab() { spectacle -b -n -a -e -S -o "$1"; }
-elif [ -n "${NIRI_SOCKET:-}" ]; then
-    grab() { niri msg action screenshot-window --path "$1" >/dev/null; }
-elif command -v spectacle >/dev/null; then
-    grab() { spectacle -b -n -a -e -S -o "$1"; }
-else
-    echo "screenshots: needs spectacle (KDE) or a niri session" >&2
-    exit 1
-fi
+[ -e "$root/greeter/Commons" ] || { echo "screenshots: run 'make dev' first" >&2; exit 1; }
 
 mkdir -p "$out" "$work/walls"
 python3 "$here/readme-assets.py" wallpapers "$work/walls" >/dev/null
@@ -39,46 +29,55 @@ wall() {   # wall PALETTE MODE → a rendered PNG
     echo "$png"
 }
 
-ipc() { qs -p "$greeter" ipc call greeter "$@" >/dev/null; }
+id=""
+ipc() { qs ipc -i "$id" call greeter "$@" >/dev/null; }
 
-pid=""
 stop() {
-    [ -n "$pid" ] || return 0
-    qs kill -p "$greeter" >/dev/null 2>&1 || true
-    wait "$pid" 2>/dev/null || true
-    pid=""
+    [ -n "$id" ] || return 0
+    qs kill -i "$id" >/dev/null 2>&1 || true
+    id=""
+    sleep 0.5
 }
 trap stop EXIT
 
-# start NAME PALETTE MODE [preview flags…]
+# start PALETTE MODE [preview flags…]   (no widgets unless asked for)
 start() {
     stop
-    "$bin" preview --palette "$2" --mode "$3" --wallpaper "$(wall "$2" "$3")" "${@:4}" >/dev/null 2>&1 &
-    pid=$!
+    local log=$work/preview.log
+    "$bin" preview --palette "$1" --mode "$2" --wallpaper "$(wall "$1" "$2")" "${@:3}" > "$log" 2>&1 &
     sleep "$boot"
+    id=$(grep -o "by-id/[a-z0-9]*" "$log" | head -1 | cut -d/ -f2)
+    [ -n "$id" ] || { echo "screenshots: the preview didn't start; see $log" >&2; exit 1; }
 }
+
+empty=$work/no-widgets.json
+echo '{"widgets": [], "locked": false}' > "$empty"
 
 shot() {   # shot NAME [settle-seconds]
     sleep "${2:-$settle}"
-    grab "$out/$1.png"
+    ipc grab "$out/$1.png"
+    sleep 0.8
     echo "  $out/$1.png"
 }
 
 echo "Capturing to $out"
 
-start login flamenco dark;                  shot login-dark
-ipc menu users;                             shot user-picker
-ipc menu sessions;                          shot session-picker
-ipc menu "";  ipc type wrong; ipc submit;   shot wrong-password 1
+start flamenco dark --widgets "$empty";       shot login-dark
+ipc menu users;                               shot user-picker
+ipc menu sessions;                            shot session-picker
+ipc menu "";  ipc type wrong; ipc submit;     shot wrong-password 1
 
-start login flamenco light;                 shot login-light
+start flamenco light --widgets "$empty";      shot login-light
 
-start fp flamenco dark --fingerprint;       shot fingerprint
-ipc finger false;                           shot fingerprint-miss 0.3
-sleep 2.5;    ipc type hunter2;             shot fingerprint-typing
+start flamenco dark --fingerprint --widgets "$empty";   shot fingerprint
+ipc finger false;                             shot fingerprint-miss 0.3
+sleep 2.5;    ipc type hunter2;               shot fingerprint-typing
+
+start flamenco dark --widgets "$here/demo-widgets.json";  shot widgets
+ipc edit true;                                shot widgets-edit
 
 for p in catppuccin rosepine nord gruvbox dracula kanagawa tokyonight everforest; do
-    start "$p" "$p" dark;                   shot "palette-$p"
+    start "$p" dark --widgets "$empty";       shot "palette-$p"
 done
 
 stop
