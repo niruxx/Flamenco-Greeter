@@ -2,7 +2,7 @@
 #
 # Builds from this local checkout:  cd packaging/arch && makepkg -si
 pkgname=flamenco-greeter
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="greetd login screen for Flamenco Shell, matching its lock screen and theme"
 arch=('any')
@@ -17,6 +17,8 @@ optdepends=(
     'matugen: colors from wallpaper on the login screen'
     'upower: battery on the login screen'
     'fprintd: fingerprint login (flamenco-greeter fingerprint enable)'
+    'qt6-multimedia: live (video) wallpapers on the login screen'
+    'ffmpeg: stills of live wallpapers when syncing'
 )
 install=flamenco-greeter.install
 

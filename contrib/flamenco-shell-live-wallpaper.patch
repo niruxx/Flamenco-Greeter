@@ -1,0 +1,73 @@
+diff -ru a/bin/flamenco b/bin/flamenco
+--- a/bin/flamenco	2026-10-26 02:24:50.530360665 -0500
++++ b/bin/flamenco	2026-10-26 02:24:50.552551133 -0500
+@@ -2523,12 +2523,20 @@
+                  "blur": max(0.0, min(1.0, float(wp.get("blur", 0)))), "dim": max(0.0, min(1.0, float(wp.get("dim", 0)))),
+                  "color": str(wp.get("color") or "#000000")}
+     src = Path(str(wp.get("path", ""))).expanduser() if mode in ("desktop", "custom") else None
++    # "desktop" lets the greeter show a user's own synced wallpaper instead (flamenco-greeter sync)
++    wallpaper["source"] = mode
+     if src is not None:
+         if not src.is_file():
+             die(f"wallpaper not found: {src}")
+-        # a live wallpaper: the login screen gets its still
++        # a live wallpaper: the login screen gets its still, plus the video itself to play
++        # over it (unless live wallpapers are off), as wallpaper-live.<ext>
+         if src.suffix.lower() in (".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi"):
+-            src = live_poster(Path(os.path.abspath(src))) or die(f"couldn't make a still of {src} for the login screen (is ffmpeg installed?)")
++            video = Path(os.path.abspath(src))
++            src = live_poster(video) or die(f"couldn't make a still of {video} for the login screen (is ffmpeg installed?)")
++            if wp.get("live", True):
++                files["wallpaper-live" + video.suffix.lower()] = video
++                wallpaper.update(live="wallpaper-live" + video.suffix.lower(),
++                                 liveSpeed=max(0.25, min(2.0, float(wp.get("liveSpeed", 1.0)))))
+         name = "wallpaper" + src.suffix.lower()
+         files[name] = src
+         wallpaper.update(mode="image", file=name)
+@@ -2595,7 +2603,7 @@
+ find "$new" -type d -exec chmod 0755 {} +
+ find "$new" -type f -exec chmod 0644 {} +
+ chmod 0755 "$new"
+-rm -f -- "$dest"/wallpaper.*
++rm -f -- "$dest"/wallpaper.* "$dest"/wallpaper-live.*
+ rm -rf -- "$dest/avatars"
+ mv -T -- "$new/avatars" "$dest/avatars"
+ for f in "$new"/*; do
+diff -ru a/docs/greeter.md b/docs/greeter.md
+--- a/docs/greeter.md	2026-10-26 02:24:50.533119364 -0500
++++ b/docs/greeter.md	2026-10-26 02:24:50.553066473 -0500
+@@ -26,9 +26,10 @@
+ | `./` | `greeter` (the `default_session` user), `0755` | The greeter may write its own state here, e.g. `memory.json` with the last user and session |
+ | `config.json` | `root`, `0644` | The settings, below |
+ | `wallpaper.<ext>` | `root`, `0644` | The background image, when `wallpaper.mode` is `"image"` |
++| `wallpaper-live.<ext>` | `root`, `0644` | A live wallpaper's video, when `wallpaper.live` names it (`wallpaper.<ext>` is then its still) |
+ | `avatars/<user>.<ext>` | `root`, `0644` | User pictures, keyed by login name |
+ 
+-Each Apply replaces `config.json`, `wallpaper.*` and `avatars/*`. Anything else in the folder, like the greeter's own state, is left alone.
++Each Apply replaces `config.json`, `wallpaper.*`, `wallpaper-live.*` and `avatars/*`. Anything else in the folder, like the greeter's own state, is left alone.
+ 
+ ## `config.json` (version 1)
+ 
+@@ -71,6 +72,9 @@
+ | `wallpaper.mode` | `"image"` means draw `file` (relative to this folder). `"color"` means fill with `color`. |
+ | `wallpaper.fillMode` | `crop`, `fit` or `stretch`, the same as the shell's. |
+ | `wallpaper.blur`, `wallpaper.dim` | 0–1. |
++| `wallpaper.source` | Where the picture came from: `desktop` (the desktop's wallpaper), `custom` (picked for the login screen) or `color`. With `desktop`, a greeter may show a user's own synced wallpaper instead. Missing (older shells): treat it as `custom`. |
++| `wallpaper.live` | Optional. A live wallpaper's video, relative to this folder, to play over `file` (its still). Sent unless live wallpapers are off in the shell. |
++| `wallpaper.liveSpeed` | Playback speed of `live`, 0.25–2. |
+ | `sessions.default` | A session file name from `/usr/share/wayland-sessions` or `/usr/share/xsessions`. `""` means the last session used. |
+ | `sessions.hidden` | Session file names to leave out of the picker. |
+ | `sessions.picker` | `false` means always start `default` (or the last session used) without offering a choice. |
+diff -ru a/shell/Modules/Settings/Pages/LoginSection.qml b/shell/Modules/Settings/Pages/LoginSection.qml
+--- a/shell/Modules/Settings/Pages/LoginSection.qml	2026-10-26 02:24:50.532135411 -0500
++++ b/shell/Modules/Settings/Pages/LoginSection.qml	2026-10-26 02:24:50.552984846 -0500
+@@ -67,7 +67,8 @@
+         if (st.me && Settings.data.general.avatar)
+             avatars[st.me] = Paths.expand(Settings.data.general.avatar);
+         const spec = {
+-            wallpaper: { mode: g.wallpaperMode, path: wallpaperPath, color: g.color || String(Theme.bg), blur: g.blur, dim: g.dim, fillMode: Settings.data.wallpaper.fillMode },
++            wallpaper: { mode: g.wallpaperMode, path: wallpaperPath, color: g.color || String(Theme.bg), blur: g.blur, dim: g.dim, fillMode: Settings.data.wallpaper.fillMode,
++                         live: Settings.data.wallpaper.live ?? true, liveSpeed: Settings.data.wallpaper.liveSpeed ?? 1 },
+             appearance: { dark: Theme.dark, colors: colorsHex(), fontFamily: g.fontFamily || Settings.data.appearance.fontFamily, monoFamily: g.monoFamily || Settings.data.appearance.monoFamily, fontScale: g.fontScale, roundness: Settings.data.appearance.roundness },
+             clock: { use24h: Settings.data.general.use24h, showSeconds: Settings.data.general.showSeconds },
+             sessions: { picker: g.sessionPicker, default: g.defaultSession, hidden: g.hiddenSessions },

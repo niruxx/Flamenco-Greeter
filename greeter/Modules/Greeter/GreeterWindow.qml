@@ -12,5 +12,7 @@ FloatingWindow {
     GreeterContent {
         anchors.fill: parent
         primary: true
+        // the first screen's wallpaper (per-screen wallpapers, like the real login screen)
+        screenName: Quickshell.screens[0]?.name ?? ""
     }
 }

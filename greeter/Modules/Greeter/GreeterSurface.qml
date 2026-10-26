@@ -24,6 +24,7 @@ Variants {
         GreeterContent {
             anchors.fill: parent
             primary: win.primary
+            screenName: win.modelData?.name ?? ""
         }
     }
 }

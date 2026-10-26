@@ -14,10 +14,16 @@ Item {
     id: root
 
     property bool primary: true
+    property string screenName: ""
 
-    // 0 → 1 once the theme is ready, back to 0 while the session starts
+    // 0 → 1 once the theme is ready, back to 0 while the session starts. Newer
+    // shells have a speed per area (Appearance → Motion); the lock's applies here.
     property real p: 0
-    Behavior on p { Anim { duration: Theme.durXl; easing.bezierCurve: Theme.curves.emphasized } }
+    readonly property int enterDuration: typeof Theme.durA === "function" ? Theme.durA("lock", 650) : Theme.durXl
+    Behavior on p { Anim { duration: root.enterDuration; easing.bezierCurve: Theme.curves.emphasized } }
+
+    // the shell's themed text caret (Appearance → Text cursor), when it has one
+    readonly property Component caret: Greeter.caret
 
     // With "colors from wallpaper", give matugen a moment so the screen
     // doesn't flash the fallback palette first.
@@ -61,62 +67,10 @@ Item {
 
     Keys.onEscapePressed: stopEditing()
 
-    // ── wallpaper (cross-fades when a different user's theme comes in) ──
-    readonly property string wallpaper: Paths.expand(Settings.data.wallpaper.current)
-    property bool showB: false
-    onWallpaperChanged: {
-        if (showB)
-            wallA.source = Paths.toUrl(wallpaper);
-        else
-            wallB.source = Paths.toUrl(wallpaper);
-        showB = !showB;
-    }
-
-    Item {
-        id: wallLayer
+    // ── wallpaper: color, picture or live, per screen (GreeterBackdrop) ──
+    GreeterBackdrop {
         anchors.fill: parent
-        visible: false
-        layer.enabled: true
-
-        Rectangle {
-            anchors.fill: parent
-            gradient: Gradient {
-                GradientStop { position: 0; color: Theme.surfaceHigh }
-                GradientStop { position: 1; color: Theme.bg }
-            }
-        }
-        Image {
-            id: wallA
-            anchors.fill: parent
-            fillMode: Image.PreserveAspectCrop
-            asynchronous: true
-            source: Paths.toUrl(root.wallpaper)
-            opacity: root.showB ? 0 : 1
-            Behavior on opacity { Anim { duration: Theme.durXl } }
-        }
-        Image {
-            id: wallB
-            anchors.fill: parent
-            fillMode: Image.PreserveAspectCrop
-            asynchronous: true
-            opacity: root.showB ? 1 : 0
-            Behavior on opacity { Anim { duration: Theme.durXl } }
-        }
-    }
-    MultiEffect {
-        anchors.fill: parent
-        source: wallLayer
-        blurEnabled: true
-        blurMax: 64
-        blur: 1
-        brightness: -0.18
-        saturation: -0.1
-        scale: 1.06
-    }
-    Rectangle {
-        anchors.fill: parent
-        color: Theme.bg
-        opacity: 0.25
+        screenName: root.screenName
     }
 
     // the background: a click closes a menu or finishes editing; holding it starts editing
@@ -219,6 +173,7 @@ Item {
 
             StateLayer {
                 radius: face.radius
+                disabled: !GreeterConfig.userList
                 onClicked: root.menu = root.menu === "users" ? "" : "users"
             }
         }
@@ -241,11 +196,13 @@ Item {
                     font.weight: Font.Bold
                 }
                 FIcon {
+                    visible: GreeterConfig.userList
                     icon: root.menu === "users" ? "expand_less" : "expand_more"
                     color: Theme.textDim
                 }
             }
             StateLayer {
+                disabled: !GreeterConfig.userList
                 onClicked: root.menu = root.menu === "users" ? "" : "users"
             }
         }
@@ -265,6 +222,7 @@ Item {
 
             TextInput {
                 id: nameInput
+                cursorDelegate: root.caret
                 anchors.fill: parent
                 anchors.leftMargin: 24
                 anchors.rightMargin: 24
@@ -337,6 +295,7 @@ Item {
 
             TextInput {
                 id: input
+                cursorDelegate: root.caret
                 anchors.fill: parent
                 anchors.leftMargin: 24
                 anchors.rightMargin: 48
@@ -449,7 +408,7 @@ Item {
         model: Greeter.users.map((u, i) => ({
                     title: u.realName || u.name,
                     subtitle: u.realName && u.realName !== u.name ? u.name : "",
-                    avatar: u.avatar,
+                    avatar: Greeter.avatarFor(u),
                     current: !Greeter.manualUser && i === Greeter.userIndex
                 })).concat([{ title: "Other user…", icon: "person_add", current: Greeter.manualUser }])
         onPicked: index => {
@@ -477,7 +436,8 @@ Item {
 
         Rectangle {
             id: sessionChip
-            visible: Greeter.sessions.length > 0
+            // Lock & Login → session picker off: the default (or last) session just starts
+            visible: Greeter.sessions.length > 0 && GreeterConfig.sessionPicker
             implicitWidth: srow.implicitWidth + 32
             implicitHeight: 52
             radius: 26
@@ -504,9 +464,9 @@ Item {
             }
         }
 
-        FIconButton { icon: "bedtime"; size: 52; flat: false; onClicked: GreeterPower.suspend() }
-        FIconButton { icon: "restart_alt"; size: 52; flat: false; onClicked: GreeterPower.reboot() }
-        FIconButton { icon: "power_settings_new"; size: 52; flat: false; iconColor: Theme.error; onClicked: GreeterPower.shutdown() }
+        FIconButton { visible: GreeterConfig.powerButtons; icon: "bedtime"; size: 52; flat: false; onClicked: GreeterPower.suspend() }
+        FIconButton { visible: GreeterConfig.powerButtons; icon: "restart_alt"; size: 52; flat: false; onClicked: GreeterPower.reboot() }
+        FIconButton { visible: GreeterConfig.powerButtons; icon: "power_settings_new"; size: 52; flat: false; iconColor: Theme.error; onClicked: GreeterPower.shutdown() }
     }
 
     GreeterMenu {

@@ -26,6 +26,7 @@ LoginWidgetCard {
         }
         TextEdit {
             id: edit
+            cursorDelegate: Greeter.caret
             anchors.left: pin.right
             anchors.leftMargin: Theme.sp2
             anchors.right: parent.right

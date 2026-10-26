@@ -58,6 +58,7 @@ LoginWidgetCard {
 
                 TextInput {
                     id: cityInput
+                    cursorDelegate: Greeter.caret
                     anchors.fill: parent
                     anchors.leftMargin: 14
                     anchors.rightMargin: 14

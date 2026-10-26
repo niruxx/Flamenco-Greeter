@@ -3,6 +3,8 @@ Description=Keep the Flamenco login screen in step with your theme
 
 [Path]
 PathChanged=%h/.config/flamenco/settings.json
+# a new profile picture is often the same file, rewritten
+PathChanged=%h/.face
 Unit=flamenco-greeter-sync.service
 
 [Install]

@@ -7,7 +7,7 @@
 </picture>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.3.0-E8466F?style=for-the-badge" alt="Version 0.3.0">
+  <img src="https://img.shields.io/badge/version-0.4.0-E8466F?style=for-the-badge" alt="Version 0.4.0">
   <img src="https://img.shields.io/badge/greetd-greeter-FFB867?style=for-the-badge" alt="greetd greeter">
   <img src="https://img.shields.io/badge/Quickshell-0.3.2-FF5722?style=for-the-badge&logo=qt&logoColor=white" alt="Quickshell 0.3.2">
   <img src="https://img.shields.io/badge/Material%20Design-3-6750A4?style=for-the-badge&logo=materialdesign&logoColor=white" alt="Material Design 3">
@@ -19,6 +19,7 @@
   <a href="#features"><b>✨ Features</b></a> &nbsp;·&nbsp;
   <a href="#install"><b>🚀 Install</b></a> &nbsp;·&nbsp;
   <a href="#configure"><b>⚙️ Configure</b></a> &nbsp;·&nbsp;
+  <a href="#lock-and-login"><b>🔗 Lock &amp; Login</b></a> &nbsp;·&nbsp;
   <a href="#widgets"><b>🧩 Widgets</b></a> &nbsp;·&nbsp;
   <a href="#fingerprint"><b>👆 Fingerprint</b></a> &nbsp;·&nbsp;
   <a href="#doctor"><b>🩺 Doctor</b></a> &nbsp;·&nbsp;
@@ -84,6 +85,7 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
 - [✨ Features](#features)
 - [🚀 Install](#install): prebuilt package, build the package, from source
 - [⚙️ Configure](#configure): turn it on, sync your theme, what carries over, compositor & monitors, launcher options
+- [🔗 Flamenco Shell's Lock & Login](#lock-and-login): Apply, live wallpapers, what wins
 - [🧩 Widgets](#widgets)
 - [👆 Fingerprint login](#fingerprint)
 - [🩺 When the login screen won't start](#doctor): the doctor, the text-login fallback
@@ -167,6 +169,8 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
 | ⌨️ **Your keyboard & cursor** | Layout, variant, options, repeat rate, numlock and cursor theme are applied to the greeter's compositor, so your password types the same as on the desktop. |
 | 👆 **Fingerprint** | With fprintd: the reader listens as soon as a user is picked, "Scan your finger on the reader" appears, and a typed password goes in as soon as the current scan ends. |
 | 🧩 **Widgets** | Press and hold the background to add a clock, calendar, weather, battery, system info or notes, then drag them into place. |
+| 🔗 **Lock & Login** | Everything you set in Flamenco Shell's Settings → Lock & Login and **Apply**: wallpaper or color, blur and dim, fonts, avatars, sessions, users, power buttons, fingerprint. |
+| 🎞️ **Live wallpapers** | A video or GIF wallpaper plays behind the login card, as on the desktop: muted, at the shell's speed, fading in over its still. |
 | 🩺 **Self-checks** | The UI is test-loaded before every start after an update; if it's broken, or keeps crashing, you get a text login with the reason. `flamenco-greeter doctor` explains the rest. |
 | 🔐 **Extra PAM prompts** | One-time codes, token PINs and lockout notices show up in the password field. |
 | 🪟 **niri, Hyprland or sway** | The compositor config is generated at every start. Your own monitor layout can be included. |
@@ -178,7 +182,7 @@ Flamenco Greeter is the login screen for [Flamenco Shell](https://github.com/nir
 
 ## 🚀 Install
 
-**Requirements:** [Flamenco Shell](https://github.com/niruxx/flamenco-shell) (the greeter reuses its theme code), `greetd`, `quickshell`, `python`, and a compositor (`niri`, `hyprland` or `sway`). Optional: `fprintd` for fingerprint login, `matugen` for wallpaper colors, `upower` for the battery indicator.
+**Requirements:** [Flamenco Shell](https://github.com/niruxx/flamenco-shell) (the greeter reuses its theme code), `greetd`, `quickshell`, `python`, and a compositor (`niri`, `hyprland` or `sway`). Optional: `qt6-multimedia` for live (video) wallpapers, `ffmpeg` for their stills, `fprintd` for fingerprint login, `matugen` for wallpaper colors, `upower` for the battery indicator.
 
 ### 📦 Option 1: the prebuilt package (Arch Linux)
 
@@ -186,7 +190,7 @@ Every release is kept under [`History Builds/`](History%20Builds), one folder pe
 
 ```sh
 sudo pacman -S --needed greetd quickshell niri   # if not installed yet
-sudo pacman -U "History Builds/flamenco-greeter-0.3.0-1/flamenco-greeter-0.3.0-1-any.pkg.tar.zst"
+sudo pacman -U "History Builds/flamenco-greeter-0.4.0-1/flamenco-greeter-0.4.0-1-any.pkg.tar.zst"
 ```
 
 Pacman's systemd hooks create the `greeter` user and the `/var/cache/flamenco-greeter` data folder automatically.
@@ -262,7 +266,7 @@ sudo usermod -aG greeter $USER                            # then log out and bac
 systemctl --user enable --now flamenco-greeter-sync.path
 ```
 
-From then on, every change you make in Flamenco Settings reaches the login screen by itself, with no password prompts.
+From then on, every change you make in Flamenco Settings reaches the login screen by itself, with no password prompts: a new wallpaper (live ones included), a new profile picture, palette or font.
 
 ### 3. Check everything
 
@@ -277,7 +281,7 @@ It should end with *Everything looks right*. Then reboot (or `sudo systemctl res
 | Settings page | On the login screen |
 |---|---|
 | **Appearance** | Palette (or colors from your wallpaper), dark/light mode, accent color, roundness, font, UI scale, animation speed |
-| **Wallpaper** | The current wallpaper, blurred behind the login card like the lock screen |
+| **Wallpaper** | The current wallpaper, **live ones playing** (videos, GIFs, at the same speed, muted); with *per screen* on, each screen's own; fill mode (crop, fit, stretch) |
 | **About** | Your profile picture (or `~/.face`) |
 | **Clock** | 24-hour or 12-hour time |
 | **Keyboard** | Layout, variant, options, model, repeat delay and rate, numlock |
@@ -317,6 +321,46 @@ Add these after `--command` in greetd's `command = "…"` line:
 | `--cache-dir DIR` | Use a different data folder (default `/var/cache/flamenco-greeter`) |
 | `-p, --path DIR` | Run a different copy of the greeter UI |
 | `--debug` | Log to the terminal instead of the journal |
+
+<p align="right"><a href="#top">⬆️ Back to top</a></p>
+
+<a id="lock-and-login"></a>
+
+## 🔗 Flamenco Shell's Lock & Login
+
+Flamenco Shell has a page for the login screen: **Settings → Lock & Login**. Choose there, press **Apply**, and the next login screen shows it. Apply writes `config.json`, the wallpaper and avatars to `/var/cache/flamenco-greeter` ([the format](https://github.com/niruxx/flamenco-shell/blob/main/docs/greeter.md)), and the greeter reads all of it, even while it's running:
+
+| In Lock & Login | On the login screen |
+|---|---|
+| Wallpaper: desktop, custom image or color | The background, with its fill mode |
+| Blur, dim | How blurred and how dark the background is (0 blur is a sharp wallpaper) |
+| Font, mono font, text size | The login screen's type |
+| Your picture | The avatar, for each user it was applied for |
+| Session picker, default session, hidden sessions | Whether the session chip shows, which session is preselected, which are left out |
+| User list, remember last user | A list of users or a name to type, and whether the last one is preselected |
+| Power buttons | Suspend, restart and shut down at the bottom |
+| Fingerprint | Whether the reader listens (see [Fingerprint login](#fingerprint)) |
+
+**What wins when both are set.** `flamenco-greeter sync` brings each user's *own* theme and wallpaper; Lock & Login sets the *login screen's*. So:
+
+- Colors: the selected user's synced theme when there is one, else the colors Apply sent.
+- Wallpaper: Lock & Login's custom image or color always. If it's set to *desktop*, the selected user's own synced wallpaper is used (so a live one plays, and per-screen ones show), falling back to the one Apply sent.
+- Fonts, text size, clock, and every option in the table: Lock & Login.
+
+### 🎞️ Live wallpapers
+
+A video or GIF wallpaper plays behind the login card, muted, at the speed set in the shell, fading in over its still once the first frame is up. Turning live wallpapers off in the shell shows the still instead. Videos need `qt6-multimedia` (without it, the still shows).
+
+- **Synced:** `flamenco-greeter sync` copies the video and its still (the shell's own poster, or one made with `ffmpeg`).
+- **Applied:** today's Flamenco Shell sends only a still for a live wallpaper (GIFs already animate). [`contrib/flamenco-shell-live-wallpaper.patch`](contrib/flamenco-shell-live-wallpaper.patch) makes Apply send the video too, and say whether the picture is the desktop's, a backward-compatible change to `config.json` (`wallpaper.live`, `liveSpeed`, `source`) documented in the shell's `docs/greeter.md`. Apply it in your flamenco-shell checkout with `git apply`.
+
+### Try it before logging out
+
+```sh
+flamenco-greeter preview                 # your synced theme + what Lock & Login applied
+flamenco-greeter preview --as-applied    # only what Apply sent, as on a machine nobody synced
+flamenco-greeter preview --from DIR      # a Lock & Login folder from somewhere else
+```
 
 <p align="right"><a href="#top">⬆️ Back to top</a></p>
 
@@ -408,6 +452,7 @@ It checks everything the login screen depends on, groups the results, and puts t
 | **Greeter interface** | the UI files, the links into Flamenco Shell, and a real off-screen load of every QML file, with the exact file and line when one breaks |
 | **Authentication (PAM)** | `/etc/pam.d/greetd` and every PAM module it uses (following includes), fingerprint setup |
 | **Greeter user and data** | the `greeter` user, the data folder's owner and permissions, whether your theme is synced and up to date, widgets |
+| **Flamenco Shell login settings** | what Lock & Login last applied and when, that its wallpaper and avatars are there, Qt Multimedia for a live wallpaper, its options |
 | **Compositor and display** | the niri (or sway) config the launcher would write, checked with `niri validate`; whether the seat has a usable GPU |
 | **Desktop sessions** | installed sessions and whether their programs exist |
 | **Recent trouble** | crashes, text-login fallbacks, and errors from the greeter's log this boot |
@@ -415,7 +460,7 @@ It checks everything the login screen depends on, groups the results, and puts t
 An example from a machine where an update broke the interface and an old display manager was left enabled:
 
 ```text
-Flamenco Greeter 0.3.0 · doctor (as root)
+Flamenco Greeter 0.4.0 · doctor (as root)
 
 [✓] Dependencies
     ✓ greetd 0.10.3
@@ -520,7 +565,7 @@ The first screen the compositor reports gets it. Turn off the outputs you don't 
 | `flamenco-greeter sync [--quiet] [--no-sudo]` | Copy your theme, wallpaper and avatar to the login screen |
 | `flamenco-greeter fingerprint status\|enable\|disable` | Manage fingerprint login |
 | `flamenco-greeter widgets list\|lock\|unlock\|reset` | Manage the login screen's widgets |
-| `flamenco-greeter preview [--fingerprint] [--palette P] [--mode M] [--wallpaper W] [--widgets FILE]` | Try the greeter in a window (`--fingerprint` adds a pretend reader) |
+| `flamenco-greeter preview [--fingerprint] [--palette P] [--mode M] [--wallpaper W] [--widgets FILE] [--from DIR] [--as-applied]` | Try the greeter in a window (`--fingerprint` adds a pretend reader; `--as-applied` shows only what Lock & Login applied) |
 | `flamenco-greeter doctor [--json]` (or `check`) | Check everything the login screen needs |
 | `flamenco-greeter --command niri …` | Start the greeter (what greetd runs) |
 
@@ -544,9 +589,12 @@ The first screen the compositor reports gets it. Turn off the outputs you don't 
 /etc/greetd/flamenco-niri.kdl           optional: extra niri config (monitors…)
 /etc/pam.d/greetd                       PAM stack (fingerprint block added by `fingerprint enable`)
 /usr/share/flamenco-greeter/greeter/    the UI; Commons/, Widgets/, assets/ link to Flamenco Shell
-/var/cache/flamenco-greeter/            greeter:greeter, 2770
+/var/cache/flamenco-greeter/            greeter:greeter (Flamenco Shell's Apply makes it 0755)
+  config.json, wallpaper.*, avatars/    Lock & Login, written by Flamenco Shell's Apply (root's, read-only)
+  wallpaper-live.*                      the live wallpaper's video, with the shell patch in contrib/
   users/<name>/settings.json            your synced settings (written by `sync`)
-  users/<name>/wallpaper.*, face        your wallpaper and avatar
+  users/<name>/wallpaper.*, face        your wallpaper and avatar; a video's still is <video>.jpg
+  users/<name>/screen-N.*               per-screen wallpapers
   state/memory.json                     last user + session
   state/widgets.json                    the login screen's widgets
   state/failures, state/fallback        crash and text-login history (read by `doctor`)

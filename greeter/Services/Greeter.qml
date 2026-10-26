@@ -19,7 +19,9 @@ Singleton {
 
     // ── users + sessions (from `flamenco-greeter users|sessions --json`) ──
     property var users: []
-    property var sessions: []
+    property var allSessions: []
+    // Lock & Login in Flamenco Shell can hide sessions (by file name, e.g. "gnome-classic.desktop")
+    readonly property var sessions: allSessions.filter(s => !GreeterConfig.hiddenSessions.includes(s.id + ".desktop") && !GreeterConfig.hiddenSessions.includes(s.id))
     property int userIndex: -1
     property int sessionIndex: 0
     property bool usersLoaded: false
@@ -33,7 +35,12 @@ Singleton {
     readonly property var user: manualUser ? null : users[userIndex] ?? null
     readonly property string username: manualUser ? manualName.trim() : user?.name ?? ""
     readonly property string displayName: manualUser ? (manualName.trim() || "Other user") : user?.realName || username
-    readonly property string avatar: user?.avatar ?? ""
+    readonly property string avatar: avatarFor(user)
+
+    // a picture applied in Flamenco Shell (Lock & Login), else the synced one / AccountsService's
+    function avatarFor(u) {
+        return u ? GreeterConfig.avatar(u.name) || u.avatar || "" : "";
+    }
     readonly property var session: sessions[sessionIndex] ?? null
 
     // ── auth (same names as the shell's Lock scope) ──
@@ -54,7 +61,9 @@ Singleton {
     // reader, or falls straight through to the password prompt, which is then
     // held until Enter.
     readonly property bool previewFingerprint: Quickshell.env("FLAMENCO_GREETER_PREVIEW_FINGERPRINT") === "1"
-    property bool fingerprintAvailable: preview && previewFingerprint
+    property bool fingerprintProbe: false        // reader + pam_fprintd, from the probe
+    // and wanted: Flamenco Shell's Lock & Login can switch it off
+    readonly property bool fingerprintAvailable: preview ? previewFingerprint : fingerprintProbe && GreeterConfig.fingerprint
     property bool scanning: false        // the reader is waiting for a finger
     property bool sawFingerprint: false  // this PAM session went through the reader
     property int fingerprintMisses: 0    // listening stops after too many, until the user is picked again
@@ -75,6 +84,16 @@ Singleton {
     property string pendingMode: ""      // the session to start once greetd is idle
 
     readonly property string hostName: hostnameFile.text().trim()
+
+    // Flamenco Shell's text caret (Appearance → Text cursor, 0.45+) for our text
+    // fields; with an older shell, null, i.e. Qt's standard cursor
+    readonly property Component caret: caretFile.text() ? Qt.createComponent(Paths.toUrl(caretFile.path)) : null
+    FileView {
+        id: caretFile
+        path: Quickshell.shellDir + "/Widgets/Caret.qml"
+        blockLoading: true
+        printErrors: false
+    }
 
     function selectUser(i) {
         cancel();
@@ -229,7 +248,8 @@ Singleton {
         scanning = false;
         errorText = "";
         unlocking = true;
-        GreeterMemory.remember(username, session?.id ?? "");
+        if (GreeterConfig.rememberLast)
+            GreeterMemory.remember(username, session?.id ?? "");
         launchTimer.start();
     }
 
@@ -429,7 +449,7 @@ Singleton {
         stdout: StdioCollector {
             onStreamFinished: {
                 try {
-                    root.sessions = JSON.parse(text);
+                    root.allSessions = JSON.parse(text);
                 } catch (e) {
                     console.warn("[Greeter] could not read sessions:", e);
                 }
@@ -445,7 +465,7 @@ Singleton {
             onStreamFinished: {
                 try {
                     const fp = JSON.parse(text);
-                    root.fingerprintAvailable = fp.pam && fp.readers > 0;
+                    root.fingerprintProbe = fp.pam && fp.readers > 0;
                 } catch (e) {
                     console.warn("[Greeter] could not read fingerprint state:", e);
                 }
@@ -458,14 +478,23 @@ Singleton {
     onReadyChanged: {
         if (!ready)
             return;
-        const ui = users.findIndex(u => u.name === GreeterMemory.lastUser);
-        if (users.length === 0)
+        const c = GreeterConfig;
+        const last = c.rememberLast ? GreeterMemory.lastUser : "";
+        const wanted = last || c.defaultUser;
+        const ui = users.findIndex(u => u.name === wanted);
+        if (users.length === 0 || !c.userList) {
+            // Lock & Login → "list users" off: ask for a name instead
             manualUser = true;
-        else
+            manualName = c.rememberLast ? last : "";
+        } else {
             userIndex = ui >= 0 ? ui : 0;
-        const si = sessions.findIndex(s => s.id === GreeterMemory.lastSession);
+        }
+        const pick = id => sessions.findIndex(s => id && (s.id === id || s.id + ".desktop" === id));
+        const si = pick(c.rememberLast ? GreeterMemory.lastSession : "");
+        const sd = pick(c.defaultSession);
         const niri = sessions.findIndex(s => /niri/i.test(s.id));
-        sessionIndex = si >= 0 ? si : niri >= 0 ? niri : 0;
+        // with the picker off, the chosen default wins over the last one used
+        sessionIndex = !c.sessionPicker && sd >= 0 ? sd : si >= 0 ? si : sd >= 0 ? sd : niri >= 0 ? niri : 0;
         Qt.callLater(listen);
     }
 
@@ -473,11 +502,118 @@ Singleton {
     // Each synced user has users/<name>/settings.json; switching users pours
     // it into the shell's Settings so Theme cross-fades to their palette and
     // wallpaper, exactly as a palette change does on the desktop.
+    //
+    // Without a synced theme for the selected user, Flamenco Shell's applied
+    // Lock & Login look (config.json) is used. Its fonts, text size and clock
+    // apply on top of either, since they were chosen for the login screen.
+    readonly property string themePath: user?.synced ? cacheDir + "/users/" + user.name + "/settings.json" : ""
+    property real baseUiScale: 1
+    onThemePathChanged: if (!themePath) applyLoginTheme()
+
     FileView {
         id: themeFile
-        path: root.user?.synced ? root.cacheDir + "/users/" + root.user.name + "/settings.json" : ""
+        path: root.themePath
         printErrors: false
         onLoaded: root.applyTheme(text())
+    }
+
+    function refreshTheme() {
+        if (themePath)
+            themeFile.reload();
+        else
+            applyLoginTheme();
+    }
+    Connections {
+        target: GreeterConfig
+        function onDataChanged() { root.refreshTheme(); }
+    }
+    // Settings reading its file would undo what was applied before it finished
+    Connections {
+        target: Settings
+        function onReadyChanged() { if (Settings.ready) root.refreshTheme(); }
+    }
+
+    function setKey(obj, key, value) {
+        if (obj && key in obj && value !== undefined && obj[key] !== value)
+            obj[key] = value;
+    }
+
+    function applyLoginTheme() {
+        const c = GreeterConfig;
+        if (!c.present)
+            return;
+        const a = Settings.data.appearance;
+        // config.json carries the colors themselves, not a palette name: hand them to
+        // Theme through the "colors from wallpaper" slot (nothing regenerates it, since
+        // no wallpaper is set for it below)
+        if (Object.keys(c.colors).length) {
+            const pal = Object.assign({}, Palettes.get("flamenco", c.dark), c.colors);
+            ColorGen.dark = pal;
+            ColorGen.light = pal;
+            setKey(a, "palette", "wallpaper");
+            setKey(a, "accentOverride", "");
+            setKey(a, "textColor", "");
+        }
+        setKey(a, "mode", c.dark ? "dark" : "light");
+        setKey(a, "roundness", c.roundness);
+        setKey(Settings.data.wallpaper, "current", "");
+        setKey(Settings.data.wallpaper, "perScreen", false);
+        baseUiScale = 1;
+        applyOverrides();
+    }
+
+    function applyOverrides() {
+        const c = GreeterConfig;
+        if (!c.present)
+            return;
+        const a = Settings.data.appearance, g = Settings.data.general;
+        if (c.fontFamily)
+            setKey(a, "fontFamily", c.fontFamily);
+        if (c.monoFamily)
+            setKey(a, "monoFamily", c.monoFamily);
+        setKey(a, "uiScale", baseUiScale * c.fontScale);
+        if (c.clock) {
+            setKey(g, "use24h", c.clock.use24h);
+            setKey(g, "showSeconds", c.clock.showSeconds);
+        }
+    }
+
+    // ── what's behind the login card ──
+    readonly property var videoExts: ["mp4", "webm", "mkv", "mov", "m4v", "avi"]
+    function ext(path) {
+        const m = String(path ?? "").toLowerCase().match(/\.([a-z0-9]+)$/);
+        return m ? m[1] : "";
+    }
+    function isVideo(path) { return videoExts.includes(ext(path)); }
+    function isAnimated(path) { return isVideo(path) || ext(path) === "gif"; }
+
+    // For one screen: { color, still, live, fill, blur, dim, speed }.
+    // The login wallpaper applied in Flamenco Shell wins, unless it's just the
+    // desktop's and the selected user has their own synced one (which may be
+    // live, or one per screen). A video's still sits next to it as <video>.jpg.
+    function backdrop(screen) {
+        const c = GreeterConfig;
+        const w = Settings.data.wallpaper;
+        const own = w.perScreen && screen ? (w.screens ?? {})[screen] : "";
+        const userWall = Paths.expand(own || w.current || "");
+        const liveOk = w.live ?? true;
+        const blur = c.present ? c.blur : 1, dim = c.present ? c.dim : 0.25;
+        if (c.present && c.wallpaperMode !== "" && !(c.fromDesktop && userWall)) {
+            if (c.wallpaperMode === "color")
+                return { color: c.color || String(Theme.bg), still: "", live: "", fill: c.fillMode, blur: 0, dim: dim, speed: 1 };
+            // a video comes as its still plus `live`; a GIF is both at once
+            const live = c.live || (ext(c.wallpaper) === "gif" ? c.wallpaper : "");
+            return { color: "", still: c.wallpaper, live: liveOk ? live : "", fill: c.fillMode, blur: blur, dim: dim, speed: c.liveSpeed };
+        }
+        return {
+            color: "",
+            still: isVideo(userWall) ? userWall + ".jpg" : userWall,
+            live: liveOk && isAnimated(userWall) ? userWall : "",
+            fill: w.fillMode || "crop",
+            blur: blur,
+            dim: dim,
+            speed: w.liveSpeed || 1
+        };
     }
 
     function applyTheme(text) {
@@ -493,9 +629,10 @@ Singleton {
             if (!target || !src)
                 continue;
             for (const k in src)
-                if (k in target && target[k] !== src[k])
-                    target[k] = src[k];
+                setKey(target, k, src[k]);
         }
+        baseUiScale = data.appearance?.uiScale ?? 1;
+        applyOverrides();
     }
 
     FileView {

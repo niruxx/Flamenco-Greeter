@@ -10,6 +10,9 @@
       --mode dark|light         try the other color mode
       --wallpaper PATH          try another wallpaper
       --widgets FILE            start with this widgets.json (default: the login screen's own)
+      --from DIR                take Flamenco Shell's Lock & Login settings (config.json, wallpaper,
+                                avatars) and widgets from DIR (default: /var/cache/flamenco-greeter)
+      --as-applied              only what Flamenco Shell's Apply sends, without your synced theme
   flamenco-greeter fingerprint status|enable|disable   fingerprint login (pam_fprintd in /etc/pam.d/greetd)
   flamenco-greeter widgets list|lock|unlock|reset      login-screen widgets (hold the background to edit)
   flamenco-greeter doctor [--json]            check everything the login screen needs (alias: check)
@@ -43,7 +46,7 @@ import tempfile
 import time
 from pathlib import Path
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 SELF = Path(__file__).resolve()
 DEFAULT_CACHE = Path("/var/cache/flamenco-greeter")
@@ -66,7 +69,8 @@ COMPOSITORS = ("niri", "hyprland", "sway")
 SYNCED_KEYS = {
     "general": ("use24h", "showSeconds", "avatar"),
     "appearance": None,  # all of it
-    "wallpaper": ("current", "fillMode"),
+    # live wallpapers (videos, GIFs) and one wallpaper per screen, as Flamenco Shell has them
+    "wallpaper": ("current", "fillMode", "live", "liveSpeed", "perScreen", "screens"),
     "keyboard": ("layout", "variant", "options", "model", "repeatDelay", "repeatRate", "numlock"),
     "apps": ("cursorTheme", "cursorSize"),
 }
@@ -254,6 +258,52 @@ def expand(p: str) -> Path | None:
     return Path(os.path.expanduser(p))
 
 
+VIDEO_EXTS = (".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi")
+
+
+def is_video(path: Path) -> bool:
+    return path.suffix.lower() in VIDEO_EXTS
+
+
+def is_animated(path: Path) -> bool:
+    return is_video(path) or path.suffix.lower() == ".gif"
+
+
+def video_still(video: Path) -> Path | None:
+    """A video's still: the poster Flamenco Shell already made (same name as its
+    Paths.poster(): md5 of the path), else one made now with ffmpeg."""
+    xdg_cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    poster = xdg_cache / "flamenco" / "live" / (hashlib.md5(str(video).encode()).hexdigest() + ".jpg")
+    if poster.is_file() and poster.stat().st_size:
+        return poster
+    if not shutil.which("ffmpeg"):
+        return None
+    tmp = Path(tempfile.mkstemp(prefix="flamenco-greeter-still-", suffix=".jpg")[1])
+    for seek in (["-ss", "1"], []):
+        subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", *seek, "-i", str(video),
+                        "-frames:v", "1", "-vf", "scale=min(2560\\,iw):-2", "-q:v", "3", str(tmp)],
+                       capture_output=True, timeout=60)
+        if tmp.stat().st_size:
+            return tmp
+    tmp.unlink(missing_ok=True)
+    return None
+
+
+def copy_wallpaper(src: Path, dest: Path, stem: str, notes: list[str]) -> str:
+    """Copy a wallpaper into a slot; a video also gets its still next to it, as
+    <name>.jpg, which the greeter shows until the video plays (or instead of it)."""
+    name = stem + src.suffix.lower()
+    shutil.copyfile(src, dest / name)
+    if is_video(src):
+        still = video_still(src)
+        if still:
+            shutil.copyfile(still, dest / (name + ".jpg"))
+        else:
+            notes.append(f"           no still for {src.name} (install ffmpeg); it shows once it plays")
+    return name
+
+
+
 def stage_user(dest: Path, cache: Path, user: str) -> list[str]:
     """Write a user's greeter slot into `dest`, with paths pointing at `cache`.
     Returns notes about what was (or wasn't) copied."""
@@ -271,13 +321,22 @@ def stage_user(dest: Path, cache: Path, user: str) -> list[str]:
 
     wall = expand((src.get("wallpaper") or {}).get("current", ""))
     if wall and wall.is_file():
-        name = "wallpaper" + wall.suffix.lower()
-        shutil.copyfile(wall, dest / name)
+        name = copy_wallpaper(wall, dest, "wallpaper", notes)
         synced["wallpaper"]["current"] = str(slot / name)
-        notes.append(f"wallpaper  {wall}")
+        notes.append(f"wallpaper  {wall}" + ("  (live)" if is_animated(wall) else ""))
     else:
         synced["wallpaper"]["current"] = ""
         notes.append("wallpaper  none set")
+
+    # one wallpaper per screen (Wallpaper → per screen in the shell)
+    screens = {}
+    for i, (output, path) in enumerate(sorted((synced["wallpaper"].get("screens") or {}).items())):
+        f = expand(str(path))
+        if f and f.is_file():
+            screens[output] = str(slot / copy_wallpaper(f, dest, f"screen-{i}", notes))
+    synced["wallpaper"]["screens"] = screens
+    if synced["wallpaper"].get("perScreen") and screens:
+        notes.append(f"per screen {', '.join(screens)}")
 
     face = expand((src.get("general") or {}).get("avatar", "") or "~/.face")
     if face and face.is_file():
@@ -336,7 +395,8 @@ def cmd_sync(args: list[str]) -> int:
             for f in stage.iterdir():
                 os.chmod(f, 0o644)
             script = (
-                f"set -e; install -d -m 2770 -o {GREETER_USER} -g {GREETER_USER} {shlex.quote(str(cache))} {shlex.quote(str(cache / 'users'))}; "
+                f"set -e; [ -d {shlex.quote(str(cache))} ] || install -d -m 2770 -o {GREETER_USER} -g {GREETER_USER} {shlex.quote(str(cache))}; "
+                f"[ -d {shlex.quote(str(cache / 'users'))} ] || install -d -m 2770 -o {GREETER_USER} -g {GREETER_USER} {shlex.quote(str(cache / 'users'))}; "
                 f"rm -rf {shlex.quote(str(dest))}; cp -r {shlex.quote(str(stage))} {shlex.quote(str(dest))}; "
                 f"chown -R {GREETER_USER}:{GREETER_USER} {shlex.quote(str(dest))}; "
                 f"chmod 2770 {shlex.quote(str(dest))}; chmod 660 {shlex.quote(str(dest))}/*"
@@ -372,12 +432,30 @@ def pick_active_theme(cache: Path) -> str:
     if users.is_dir():
         candidates += sorted(users.glob("*/settings.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     target = cache / "config" / "flamenco" / "settings.json"
+    place_stills(cache)
     for c in candidates:
         if c.is_file():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(c, target)
             return c.parent.name
     return ""
+
+
+def place_stills(cache: Path) -> None:
+    """Put each synced live wallpaper's still where the shell's ColorGen looks for a
+    video's colors (Paths.poster: <XDG_CACHE_HOME>/flamenco/live/<md5 of path>.jpg)."""
+    live = cache / "cache" / "flamenco" / "live"
+    for settings in (cache / "users").glob("*/settings.json") if (cache / "users").is_dir() else []:
+        w = read_json(settings).get("wallpaper") or {}
+        for path in [w.get("current", "")] + list((w.get("screens") or {}).values()):
+            p = Path(path) if path else None
+            still = Path(str(p) + ".jpg") if p and is_video(p) else None
+            if still and still.is_file():
+                try:
+                    live.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(still, live / (hashlib.md5(str(p).encode()).hexdigest() + ".jpg"))
+                except OSError:
+                    pass
 
 
 def cursor_theme_dir(theme: str) -> Path | None:
@@ -1037,14 +1115,15 @@ def cmd_enable(args: list[str]) -> int:
 
 def cmd_preview(args: list[str]) -> int:
     fingerprint = "--fingerprint" in args
+    as_applied = "--as-applied" in args
     overrides, rest, i = {}, [], 0
     while i < len(args):
         a = args[i]
-        if a in ("--palette", "--mode", "--wallpaper", "--widgets") and i + 1 < len(args):
+        if a in ("--palette", "--mode", "--wallpaper", "--widgets", "--from") and i + 1 < len(args):
             overrides[a[2:]] = args[i + 1]
             i += 2
         else:
-            if a != "--fingerprint":
+            if a not in ("--fingerprint", "--as-applied"):
                 rest.append(a)
             i += 1
     args = rest
@@ -1056,7 +1135,9 @@ def cmd_preview(args: list[str]) -> int:
         cache = Path(tmp)
         slot = cache / "users" / user
         stage_user(slot, cache, user)
-        if overrides:
+        if as_applied:
+            shutil.rmtree(slot)   # no synced theme: the login screen as Apply alone leaves it
+        elif overrides:
             # only the throwaway preview copy changes; your settings stay as they are
             data = read_json(slot / "settings.json")
             app = data.setdefault("appearance", {})
@@ -1069,13 +1150,24 @@ def cmd_preview(args: list[str]) -> int:
                 wall = Path(os.path.expanduser(overrides["wallpaper"]))
                 if not wall.is_file():
                     return die(f"no such wallpaper: {wall}")
-                shutil.copyfile(wall, slot / ("wallpaper" + wall.suffix.lower()))
-                data.setdefault("wallpaper", {})["current"] = str(slot / ("wallpaper" + wall.suffix.lower()))
+                name = copy_wallpaper(wall, slot, "preview-wallpaper", [])
+                data.setdefault("wallpaper", {})["current"] = str(slot / name)
             (slot / "settings.json").write_text(json.dumps(data, indent=2))
         (cache / "state").mkdir()
         (cache / "state" / "memory.json").write_text(json.dumps({"lastUser": user}))
-        # widgets: the given layout, else a copy of the real login screen's (edits stay in the preview)
-        layout = Path(overrides["widgets"]) if "widgets" in overrides else DEFAULT_CACHE / "state" / "widgets.json"
+        # Flamenco Shell's applied Lock & Login settings, with their files (copies: edits stay here)
+        source = Path(overrides["from"]) if "from" in overrides else DEFAULT_CACHE
+        if "from" in overrides and not can_read(source):
+            return die(f"can't read {source}")
+        if can_read(source) and (source / "config.json").is_file():
+            shutil.copyfile(source / "config.json", cache / "config.json")
+            for f in source.glob("wallpaper*"):
+                if f.is_file():
+                    shutil.copyfile(f, cache / f.name)
+            if can_read(source / "avatars"):
+                shutil.copytree(source / "avatars", cache / "avatars", dirs_exist_ok=True)
+        # widgets: the given layout, else a copy of the login screen's
+        layout = Path(overrides["widgets"]) if "widgets" in overrides else source / "state" / "widgets.json"
         if can_read(layout) and layout.is_file():
             shutil.copyfile(layout, cache / "state" / "widgets.json")
         elif "widgets" in overrides:
@@ -1246,7 +1338,10 @@ def check_dependencies(r: Report, conf: dict):
               f"install {binary.lower()}, or change --command in {GREETD_CONFIG}")
 
     r.ok(f"Python {sys.version.split()[0]}")
+    if qt_module("QtMultimedia") is False:
+        r.info("qt6-multimedia not installed (optional: live wallpapers play instead of showing a still)")
     for tool, why in (("matugen", "colors from wallpaper"), ("upower", "battery on the login screen"),
+                      ("ffmpeg", "stills of live wallpapers when syncing"),
                       ("gdbus", "fingerprint reader detection"), ("niri", "checking the generated niri config")):
         if tool == "niri" and comp == "niri":
             continue
@@ -1433,7 +1528,7 @@ def check_data(r: Report, cache: Path, user: str):
     if g and st.st_uid != g.pw_uid:
         r.err(f"{cache} belongs to {owner}, so the greeter can't write to it",
               f"sudo chown -R {GREETER_USER}:{GREETER_USER} {cache}")
-    elif st.st_mode & 0o070 != 0o070:
+    elif st.st_mode & 0o070 != 0o070 and not (cache / "config.json").exists():
         r.warn(f"{cache} isn't group-writable (mode {oct(st.st_mode & 0o7777)})", f"sudo chmod 2770 {cache}")
     else:
         r.ok(f"{cache} (owned by {owner}, mode {oct(st.st_mode & 0o7777)})")
@@ -1455,6 +1550,10 @@ def check_data(r: Report, cache: Path, user: str):
             r.warn(f"{user}'s theme changed since the last sync ({when})", "flamenco-greeter sync")
         else:
             r.ok(f"{user}'s theme is synced ({when})")
+        current = str((read_json(mine).get("wallpaper") or {}).get("current", ""))
+        if current and is_video(Path(current)) and qt_module("QtMultimedia") is False:
+            r.warn(f"{user}'s wallpaper is live, but Qt Multimedia isn't installed, so it shows a still",
+                   "sudo pacman -S qt6-multimedia")
     else:
         r.warn(f"{user}'s theme isn't synced, so the login screen uses the default look", "flamenco-greeter sync")
     others = [u for u in synced if u != user]
@@ -1463,6 +1562,65 @@ def check_data(r: Report, cache: Path, user: str):
     widgets = read_json(cache / "state" / "widgets.json")
     n = len(widgets.get("widgets", []))
     r.info(f"{n} widget{'s' if n != 1 else ''} on the login screen" + (", editing locked" if widgets.get("locked") else ""))
+
+
+def qt_module(name: str) -> bool | None:
+    """Whether a Qt QML module (e.g. QtMultimedia) is installed; None when we can't tell."""
+    roots = [Path(p) for p in os.environ.get("QML_IMPORT_PATH", "").split(":") if p]
+    roots += [Path(p) for p in ("/usr/lib/qt6/qml", "/usr/lib64/qt6/qml", "/usr/lib/x86_64-linux-gnu/qt6/qml",
+                                "/usr/lib/aarch64-linux-gnu/qt6/qml", "/run/current-system/sw/lib/qt-6/qml")]
+    existing = [r for r in roots if r.is_dir()]
+    if not existing:
+        return None
+    return any((r / name).is_dir() for r in existing)
+
+
+def check_login_settings(r: Report, cache: Path):
+    """Flamenco Shell's Settings → Lock & Login (config.json and its files)."""
+    r.section("Flamenco Shell login settings")
+    cfg_file = cache / "config.json"
+    if not cache.exists():
+        r.info(f"{cache} doesn't exist yet")
+        return
+    if not can_read(cache):
+        r.info(f"can't look inside {cache}: join the {GREETER_USER} group, or run with sudo")
+        return
+    if not cfg_file.exists():
+        r.info("nothing applied from Flamenco Shell yet (Settings → Lock & Login → Apply); the greeter uses synced themes and its defaults")
+        return
+    try:
+        cfg = json.loads(cfg_file.read_text())
+    except (OSError, ValueError) as e:
+        r.err(f"{cfg_file} doesn't parse ({e}), so it's ignored", "apply again from Settings → Lock & Login")
+        return
+    when = time.strftime("%a %d %b %H:%M", time.localtime(cfg_file.stat().st_mtime))
+    r.ok(f"applied {when} by {cfg.get('generator', 'Flamenco Shell')}")
+    if cfg.get("version", 1) > 1:
+        r.warn(f"config.json is version {cfg['version']}, newer than this greeter knows (1)", "update flamenco-greeter")
+    wp = cfg.get("wallpaper") or {}
+    missing = [n for n in [wp.get("file"), wp.get("live")] + list((cfg.get("users") or {}).get("avatars", {}).values())
+               if n and not (cache / n).is_file()]
+    if missing:
+        r.err("files it refers to are missing", "apply again from Settings → Lock & Login", missing)
+    if wp.get("mode") == "image" and wp.get("file") not in missing:
+        kind = "live wallpaper" if wp.get("live") or str(wp.get("file", "")).lower().endswith(".gif") else "wallpaper"
+        r.ok(f"login {kind}: {wp.get('file')}" + (f" + {wp['live']}" if wp.get("live") else "")
+             + f" ({wp.get('source', 'custom')}, blur {wp.get('blur', 0)}, dim {wp.get('dim', 0)})")
+    elif wp.get("mode") == "color":
+        r.ok(f"login background: {wp.get('color', '')}")
+    if wp.get("live") and qt_module("QtMultimedia") is False:
+        r.warn("the login wallpaper is live, but Qt Multimedia isn't installed, so it shows a still",
+               "sudo pacman -S qt6-multimedia")
+    s, u = cfg.get("sessions") or {}, cfg.get("users") or {}
+    opts = [("session picker", s.get("picker", True)), ("user list", u.get("list", True)),
+            ("power buttons", (cfg.get("power") or {}).get("buttons", True)),
+            ("fingerprint", (cfg.get("auth") or {}).get("fingerprint", False))]
+    r.info(", ".join(f"{name} {'on' if on else 'off'}" for name, on in opts)
+           + (f"; default session {s['default']}" if s.get("default") else ""))
+    if (cfg.get("auth") or {}).get("fingerprint") and not pam_has_module(GREETD_PAM, "pam_fprintd"):
+        r.warn("fingerprint login is on in Lock & Login, but greetd's PAM doesn't use pam_fprintd",
+               "flamenco-greeter fingerprint enable")
+
 
 
 def check_compositor(r: Report, opts: dict, cache: Path, qml: Path):
@@ -1572,6 +1730,7 @@ def cmd_doctor(args: list[str]) -> int:
         ("files", lambda: check_files(report, Path(opts["path"]) if opts.get("path") else greeter_dir())),
         ("pam", lambda: check_pam(report, user)),
         ("data", lambda: check_data(report, Path(opts.get("cache") or DEFAULT_CACHE), user)),
+        ("login settings", lambda: check_login_settings(report, Path(opts.get("cache") or DEFAULT_CACHE))),
         ("compositor", lambda: check_compositor(report, opts, Path(opts.get("cache") or DEFAULT_CACHE),
                                                 Path(opts["path"]) if opts.get("path") else greeter_dir())),
         ("sessions", lambda: check_sessions(report, Path(opts.get("cache") or DEFAULT_CACHE))),
