@@ -1,0 +1,16 @@
+Package: flamenco-greeter
+Version: 0.4.0-1
+Architecture: all
+Section: x11
+Priority: optional
+Maintainer: Niruxx <niruxx@users.noreply.github.com>
+Homepage: https://github.com/niruxx/Flamenco-Greeter
+Depends: greetd, python3 (>= 3.11), quickshell, qml6-module-qtquick,
+ qml6-module-qtquick-effects, qml6-module-qtquick-layouts,
+ systemd | systemd-standalone-sysusers, systemd | systemd-standalone-tmpfiles
+Suggests: flamenco-shell, niri | hyprland | sway, fprintd, libpam-fprintd,
+ qml6-module-qtmultimedia, ffmpeg, upower
+Description: greetd login screen for Flamenco Shell
+ Flamenco Greeter is a Quickshell login screen for greetd. It reuses the
+ installed Flamenco Shell theme, widgets, and assets. Install Flamenco Shell
+ system-wide under /usr for the greeter to find its QML components.
